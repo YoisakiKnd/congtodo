@@ -100,21 +100,23 @@ fn webhook(http: &Client, cfg: &Value, msg: &Msg) -> Result<RequestBuilder, Stri
     Ok(req.body(body))
 }
 
-/// 推送到所有启用的渠道；单个渠道失败只记录日志
-pub async fn broadcast(state: &Shared, msg: &Msg) {
+/// 推送到该用户所有启用的渠道；单个渠道失败只记录日志
+pub async fn broadcast(state: &Shared, user_id: i64, msg: &Msg) {
     let channels: Vec<(String, String, String)> = {
         let conn = state.db.lock().unwrap();
-        let Ok(mut stmt) = conn.prepare_cached("SELECT name, kind, config FROM channels WHERE enabled = 1") else {
+        let Ok(mut stmt) =
+            conn.prepare_cached("SELECT name, kind, config FROM channels WHERE enabled = 1 AND user_id = ?")
+        else {
             return;
         };
-        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        stmt.query_map([user_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
             .map(|rows| rows.flatten().collect())
             .unwrap_or_default()
     };
     for (name, kind, config) in channels {
         let cfg: Value = serde_json::from_str(&config).unwrap_or_default();
         if let Err(e) = send(&state.http, &kind, &cfg, msg).await {
-            eprintln!("[notify] channel '{name}' ({kind}) failed: {e}");
+            eprintln!("[notify] user {user_id} channel '{name}' ({kind}) failed: {e}");
         }
     }
 }

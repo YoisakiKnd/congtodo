@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Bell, Monitor, Moon, Plus, Send, Sun } from '@lucide/svelte';
+  import { Bell, LogOut, Monitor, Moon, Plus, Send, Sun } from '@lucide/svelte';
   import { setMode, userPrefersMode } from 'mode-watcher';
   import { toast } from 'svelte-sonner';
   import Field from '../components/Field.svelte';
@@ -12,12 +12,25 @@
   import { Switch } from '$lib/components/ui/switch';
   import { Textarea } from '$lib/components/ui/textarea';
   import * as ToggleGroup from '$lib/components/ui/toggle-group';
-  import { api, token } from '$lib/api';
-  import { db, loadAll, saveSettings, settings } from '$lib/store.svelte';
+  import { api } from '$lib/api';
+  import { auth, changePassword, db, saveSettings, settings, signOut } from '$lib/store.svelte';
   import type { Channel, ChannelKind } from '$lib/types';
 
-  // ---------- 令牌 & 通用设置 ----------
-  let tokenInput = $state(token.get());
+  // ---------- 账号 ----------
+  let pw = $state({ old: '', next: '', confirm: '' });
+  async function submitPassword(e: SubmitEvent) {
+    e.preventDefault();
+    if (pw.next !== pw.confirm) return toast.error('两次输入的新密码不一致');
+    try {
+      await changePassword(pw.old, pw.next);
+      pw = { old: '', next: '', confirm: '' };
+      toast.success('密码已修改，其他设备需要重新登录');
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
+  }
+
+  // ---------- 通用设置 ----------
   let general = $state({ term_start: '', digest_time: '' });
   $effect(() => {
     general = { term_start: settings.term_start ?? '', digest_time: settings.digest_time ?? '' };
@@ -191,16 +204,22 @@
 
     <Card.Root>
       <Card.Header>
-        <Card.Title>访问令牌</Card.Title>
-        <Card.Description>服务端设置了 CONGTODO_TOKEN 时需要填写，仅保存在本浏览器</Card.Description>
+        <Card.Title>账号</Card.Title>
+        <Card.Description>
+          当前登录：<b class="text-foreground">{auth.user?.username}</b>{#if auth.user?.is_admin}<Badge variant="secondary" class="ml-2">管理员</Badge>{/if}
+        </Card.Description>
+        <Card.Action>
+          <Button variant="outline" size="sm" onclick={signOut}><LogOut />退出登录</Button>
+        </Card.Action>
       </Card.Header>
       <Card.Content>
-        <form
-          class="flex gap-2"
-          onsubmit={(e) => (e.preventDefault(), token.set(tokenInput.trim()), loadAll(), toast.success('已保存'))}
-        >
-          <Input type="password" autocomplete="off" bind:value={tokenInput} placeholder="未设置令牌时留空" />
-          <Button type="submit" variant="outline">保存</Button>
+        <form class="grid gap-4" onsubmit={submitPassword}>
+          <div class="grid gap-3 sm:grid-cols-3">
+            <Field label="原密码"><Input required type="password" autocomplete="current-password" bind:value={pw.old} /></Field>
+            <Field label="新密码"><Input required minlength={8} type="password" autocomplete="new-password" bind:value={pw.next} /></Field>
+            <Field label="确认新密码"><Input required type="password" autocomplete="new-password" bind:value={pw.confirm} /></Field>
+          </div>
+          <div><Button type="submit" size="sm" variant="outline">修改密码</Button></div>
         </form>
       </Card.Content>
     </Card.Root>

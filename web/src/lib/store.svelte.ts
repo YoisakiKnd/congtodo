@@ -1,6 +1,6 @@
 import { SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
-import { api } from './api';
+import { api, ApiError, setUnauthorizedHandler } from './api';
 import { addDays, ymd } from './time';
 import type { CalEvent, Channel, Countdown, Course, Habit, Todo } from './types';
 
@@ -22,9 +22,12 @@ addEventListener('hashchange', () => (route.path = readHash()));
 // ---------- 提示 ----------
 
 const fail = (e: unknown) => {
-  toast.error(e instanceof Error ? e.message : String(e));
+  // 会话失效会直接切回登录页，不再逐条弹错
+  if (!(e instanceof ApiError && e.status === 401)) toast.error(e instanceof Error ? e.message : String(e));
   throw e;
 };
+// fail 重新抛出是为了让调用方（如表单对话框）知道失败；没人接的 API 错误已经提示过，不再报未处理异常
+addEventListener('unhandledrejection', (e) => e.reason instanceof ApiError && e.preventDefault());
 
 // ---------- 通用集合：乐观更新，失败回滚 ----------
 
@@ -105,9 +108,63 @@ export async function toggleHabit(id: number, day: string) {
   });
 }
 
-// ---------- 启动加载 ----------
+// ---------- 账号 ----------
 
-export const ready = $state({ ok: false });
+export type User = { id: number; username: string; is_admin: boolean };
+
+export const auth = $state({
+  user: null as User | null,
+  checked: false, // 已确认登录状态（避免闪现登录页）
+  signup: false, // 当前是否开放注册
+  first: false, // 还没有任何用户：注册的将是管理员
+});
+
+async function loadAuthConfig() {
+  const c = await api.get<{ signup: boolean; first: boolean }>('/auth/config');
+  auth.signup = c.signup;
+  auth.first = c.first;
+}
+
+function resetData() {
+  for (const c of Object.values(db)) c.items = [];
+  habitLogs.clear();
+  for (const k of Object.keys(settings)) delete settings[k];
+}
+
+setUnauthorizedHandler(() => {
+  if (!auth.user) return;
+  auth.user = null;
+  resetData();
+  toast.info('登录已过期，请重新登录');
+  loadAuthConfig();
+});
+
+export async function checkAuth() {
+  try {
+    auth.user = await api.get<User>('/auth/me');
+  } catch {
+    auth.user = null;
+    await loadAuthConfig().catch(() => {});
+  }
+  auth.checked = true;
+  if (auth.user) await loadAll();
+}
+
+export async function signIn(username: string, password: string, register = false) {
+  auth.user = await api.post<User>(register ? '/auth/register' : '/auth/login', { username, password });
+  await loadAll();
+}
+
+export async function signOut() {
+  await api.post('/auth/logout').catch(() => {});
+  auth.user = null;
+  resetData();
+  await loadAuthConfig().catch(() => {});
+}
+
+export const changePassword = (old: string, next: string) => api.post('/auth/password', { old, new: next });
+
+// ---------- 加载数据 ----------
 
 export async function loadAll() {
   const from = ymd(addDays(new Date(), -LOG_DAYS));
@@ -119,7 +176,6 @@ export async function loadAll() {
       for (const r of rows) habitLogs.add(`${r.habit_id}:${r.day}`);
     }),
   ]);
-  ready.ok = true;
 }
 
 export const PALETTE = ['#5b5bd6', '#e5484d', '#f76b15', '#f5a524', '#30a46c', '#12a594', '#0091ff', '#d6409f', '#8e4ec6', '#78716c'];

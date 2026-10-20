@@ -1,3 +1,6 @@
+# 从源码构建：docker build -t congtodo .
+# 发布流水线使用 Dockerfile.release（直接复制 CI 编译好的二进制）
+
 # ---- 前端 ----
 FROM node:22-alpine AS web
 WORKDIR /app/web
@@ -11,10 +14,11 @@ FROM rust:1-bookworm AS server
 WORKDIR /app
 COPY server/ server/
 COPY --from=web /app/web/dist web/dist
-RUN cd server && cargo build --release
+RUN cd server && cargo build --release --locked && mkdir -p /out/data
 
-# ---- 运行时：distroless 自带 tzdata，无 shell，镜像约 30MB ----
-FROM gcr.io/distroless/cc-debian12
+# ---- 运行时：distroless 自带 tzdata 和 CA 证书，无 shell，以非 root 用户运行 ----
+FROM gcr.io/distroless/cc-debian12:nonroot
+COPY --from=server --chown=65532:65532 /out/data /data
 COPY --from=server /app/server/target/release/congtodo /congtodo
 ENV CONGTODO_DB=/data/congtodo.db \
     CONGTODO_ADDR=0.0.0.0:8080 \

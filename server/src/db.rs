@@ -74,7 +74,49 @@ CREATE TABLE channels (
 );
 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
 CREATE TABLE sent_log (key TEXT PRIMARY KEY, at INTEGER NOT NULL) WITHOUT ROWID;
+"#,
+// v2：多用户。user_id = 0 表示启用账号系统之前的数据，由第一个注册的用户认领
+r#"
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    password_hash TEXT NOT NULL,
+    is_admin INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+CREATE TABLE sessions (
+    token_hash TEXT PRIMARY KEY,       -- sha256(token)，数据库泄露也拿不到可用的会话
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+) WITHOUT ROWID;
+CREATE INDEX sessions_user ON sessions(user_id);
+
+ALTER TABLE countdowns ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE events ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE courses ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE todos ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE habits ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE channels ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX countdowns_user ON countdowns(user_id);
+CREATE INDEX events_user ON events(user_id);
+CREATE INDEX courses_user ON courses(user_id);
+CREATE INDEX todos_user ON todos(user_id);
+CREATE INDEX habits_user ON habits(user_id);
+CREATE INDEX channels_user ON channels(user_id);
+
+CREATE TABLE user_settings (
+    user_id INTEGER NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY (user_id, key)
+) WITHOUT ROWID;
+INSERT INTO user_settings (user_id, key, value) SELECT 0, key, value FROM settings;
+DROP TABLE settings;
 "#];
+
+/// 带 user_id 的业务表，第一个用户注册时认领其中 user_id = 0 的旧数据
+pub const USER_TABLES: &[&str] = &["countdowns", "events", "courses", "todos", "habits", "channels", "user_settings"];
 
 pub fn open(path: &str) -> rusqlite::Result<Connection> {
     let mut conn = Connection::open(path)?;
@@ -119,7 +161,11 @@ pub fn row_to_json(row: &rusqlite::Row, json_cols: &[&str]) -> rusqlite::Result<
     Ok(Value::Object(obj))
 }
 
-pub fn get_setting(conn: &Connection, key: &str) -> Option<String> {
-    conn.query_row("SELECT value FROM settings WHERE key = ?", [key], |r| r.get(0))
-        .ok()
+pub fn get_setting(conn: &Connection, user_id: i64, key: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT value FROM user_settings WHERE user_id = ? AND key = ?",
+        (user_id, key),
+        |r| r.get(0),
+    )
+    .ok()
 }

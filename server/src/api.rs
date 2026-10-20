@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
@@ -11,7 +11,7 @@ use rusqlite::{params_from_iter, types::Value as SqlValue};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::{Shared, db::row_to_json, notify};
+use crate::{Shared, auth::UserId, db::row_to_json, notify};
 
 /// 通用 CRUD 资源描述：新增一个模块 = 加一张表 + 在这里加一行
 struct Res {
@@ -72,7 +72,7 @@ pub fn router() -> Router<Shared> {
 
 // ---------- 错误处理 ----------
 
-pub struct ApiErr(StatusCode, String);
+pub struct ApiErr(pub StatusCode, pub String);
 
 impl IntoResponse for ApiErr {
     fn into_response(self) -> Response {
@@ -89,7 +89,7 @@ impl From<rusqlite::Error> for ApiErr {
     }
 }
 
-type ApiResult<T = Json<Value>> = Result<T, ApiErr>;
+pub type ApiResult<T = Json<Value>> = Result<T, ApiErr>;
 
 fn find(name: &str) -> Result<&'static Res, ApiErr> {
     RESOURCES
@@ -119,24 +119,30 @@ fn pick<'a>(res: &Res, body: &'a Map<String, Value>) -> Vec<(&'static str, &'a V
         .collect()
 }
 
-fn fetch_one(conn: &rusqlite::Connection, res: &Res, id: i64) -> ApiResult {
-    let sql = format!("SELECT * FROM {} WHERE id = ?", res.name);
-    Ok(Json(conn.query_row(&sql, [id], |r| row_to_json(r, res.json_cols))?))
+fn fetch_one(conn: &rusqlite::Connection, res: &Res, uid: i64, id: i64) -> ApiResult {
+    let sql = format!("SELECT * FROM {} WHERE id = ? AND user_id = ?", res.name);
+    Ok(Json(conn.query_row(&sql, [id, uid], |r| row_to_json(r, res.json_cols))?))
 }
 
 // ---------- 通用 CRUD ----------
 
-async fn list(State(s): State<Shared>, Path(name): Path<String>) -> ApiResult {
+async fn list(State(s): State<Shared>, Extension(UserId(uid)): Extension<UserId>, Path(name): Path<String>) -> ApiResult {
     let res = find(&name)?;
     let conn = s.db.lock().unwrap();
-    let mut stmt = conn.prepare_cached(&format!("SELECT * FROM {} ORDER BY {}", res.name, res.order))?;
+    let mut stmt =
+        conn.prepare_cached(&format!("SELECT * FROM {} WHERE user_id = ? ORDER BY {}", res.name, res.order))?;
     let rows = stmt
-        .query_map([], |r| row_to_json(r, res.json_cols))?
+        .query_map([uid], |r| row_to_json(r, res.json_cols))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(Json(Value::Array(rows)))
 }
 
-async fn create(State(s): State<Shared>, Path(name): Path<String>, Json(body): Json<Map<String, Value>>) -> ApiResult {
+async fn create(
+    State(s): State<Shared>,
+    Extension(UserId(uid)): Extension<UserId>,
+    Path(name): Path<String>,
+    Json(body): Json<Map<String, Value>>,
+) -> ApiResult {
     let res = find(&name)?;
     let fields = pick(res, &body);
     if fields.is_empty() {
@@ -144,16 +150,18 @@ async fn create(State(s): State<Shared>, Path(name): Path<String>, Json(body): J
     }
     let cols = fields.iter().map(|(c, _)| *c).collect::<Vec<_>>().join(",");
     let marks = vec!["?"; fields.len()].join(",");
+    let params = fields.iter().map(|(_, v)| to_sql(v)).chain([SqlValue::Integer(uid)]);
     let conn = s.db.lock().unwrap();
     conn.execute(
-        &format!("INSERT INTO {} ({cols}) VALUES ({marks})", res.name),
-        params_from_iter(fields.iter().map(|(_, v)| to_sql(v))),
+        &format!("INSERT INTO {} ({cols}, user_id) VALUES ({marks}, ?)", res.name),
+        params_from_iter(params),
     )?;
-    fetch_one(&conn, res, conn.last_insert_rowid())
+    fetch_one(&conn, res, uid, conn.last_insert_rowid())
 }
 
 async fn update(
     State(s): State<Shared>,
+    Extension(UserId(uid)): Extension<UserId>,
     Path((name, id)): Path<(String, i64)>,
     Json(body): Json<Map<String, Value>>,
 ) -> ApiResult {
@@ -162,41 +170,52 @@ async fn update(
     let conn = s.db.lock().unwrap();
     if !fields.is_empty() {
         let set = fields.iter().map(|(c, _)| format!("{c} = ?")).collect::<Vec<_>>().join(",");
-        let params = fields.iter().map(|(_, v)| to_sql(v)).chain([SqlValue::Integer(id)]);
-        conn.execute(&format!("UPDATE {} SET {set} WHERE id = ?", res.name), params_from_iter(params))?;
+        let params = fields.iter().map(|(_, v)| to_sql(v)).chain([SqlValue::Integer(id), SqlValue::Integer(uid)]);
+        conn.execute(
+            &format!("UPDATE {} SET {set} WHERE id = ? AND user_id = ?", res.name),
+            params_from_iter(params),
+        )?;
     }
-    fetch_one(&conn, res, id)
+    fetch_one(&conn, res, uid, id)
 }
 
-async fn remove(State(s): State<Shared>, Path((name, id)): Path<(String, i64)>) -> ApiResult<StatusCode> {
+async fn remove(
+    State(s): State<Shared>,
+    Extension(UserId(uid)): Extension<UserId>,
+    Path((name, id)): Path<(String, i64)>,
+) -> ApiResult<StatusCode> {
     let res = find(&name)?;
     let conn = s.db.lock().unwrap();
-    conn.execute(&format!("DELETE FROM {} WHERE id = ?", res.name), [id])?;
+    conn.execute(&format!("DELETE FROM {} WHERE id = ? AND user_id = ?", res.name), [id, uid])?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 // ---------- 设置 ----------
 
-async fn get_settings(State(s): State<Shared>) -> ApiResult<Json<HashMap<String, String>>> {
+async fn get_settings(
+    State(s): State<Shared>,
+    Extension(UserId(uid)): Extension<UserId>,
+) -> ApiResult<Json<HashMap<String, String>>> {
     let conn = s.db.lock().unwrap();
-    let mut stmt = conn.prepare_cached("SELECT key, value FROM settings")?;
+    let mut stmt = conn.prepare_cached("SELECT key, value FROM user_settings WHERE user_id = ?")?;
     let map = stmt
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .query_map([uid], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<rusqlite::Result<_>>()?;
     Ok(Json(map))
 }
 
 async fn put_settings(
     State(s): State<Shared>,
+    Extension(UserId(uid)): Extension<UserId>,
     Json(body): Json<HashMap<String, String>>,
 ) -> ApiResult<StatusCode> {
     let mut conn = s.db.lock().unwrap();
     let tx = conn.transaction()?;
     for (k, v) in &body {
         tx.execute(
-            "INSERT INTO settings (key, value) VALUES (?1, ?2)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            [k, v],
+            "INSERT INTO user_settings (user_id, key, value) VALUES (?1, ?2, ?3)
+             ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
+            (uid, k, v),
         )?;
     }
     tx.commit()?;
@@ -210,11 +229,18 @@ struct Range {
     from: Option<String>,
 }
 
-async fn habit_logs(State(s): State<Shared>, Query(q): Query<Range>) -> ApiResult {
+async fn habit_logs(
+    State(s): State<Shared>,
+    Extension(UserId(uid)): Extension<UserId>,
+    Query(q): Query<Range>,
+) -> ApiResult {
     let conn = s.db.lock().unwrap();
-    let mut stmt = conn.prepare_cached("SELECT habit_id, day FROM habit_logs WHERE day >= ? ORDER BY day")?;
+    let mut stmt = conn.prepare_cached(
+        "SELECT l.habit_id, l.day FROM habit_logs l JOIN habits h ON h.id = l.habit_id
+         WHERE h.user_id = ? AND l.day >= ? ORDER BY l.day",
+    )?;
     let rows = stmt
-        .query_map([q.from.unwrap_or_default()], |r| row_to_json(r, &[]))?
+        .query_map((uid, q.from.unwrap_or_default()), |r| row_to_json(r, &[]))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(Json(Value::Array(rows)))
 }
@@ -225,8 +251,15 @@ struct Toggle {
 }
 
 /// 切换某天的打卡状态，返回切换后的状态
-async fn habit_toggle(State(s): State<Shared>, Path(id): Path<i64>, Json(t): Json<Toggle>) -> ApiResult {
+async fn habit_toggle(
+    State(s): State<Shared>,
+    Extension(UserId(uid)): Extension<UserId>,
+    Path(id): Path<i64>,
+    Json(t): Json<Toggle>,
+) -> ApiResult {
     let conn = s.db.lock().unwrap();
+    // 确认习惯属于当前用户（不存在时返回 404）
+    conn.query_row("SELECT 1 FROM habits WHERE id = ? AND user_id = ?", [id, uid], |_| Ok(()))?;
     let removed = conn.execute("DELETE FROM habit_logs WHERE habit_id = ? AND day = ?", (id, &t.day))?;
     if removed == 0 {
         conn.execute("INSERT INTO habit_logs (habit_id, day) VALUES (?, ?)", (id, &t.day))?;
@@ -236,10 +269,14 @@ async fn habit_toggle(State(s): State<Shared>, Path(id): Path<i64>, Json(t): Jso
 
 // ---------- 通知渠道测试 ----------
 
-async fn channel_test(State(s): State<Shared>, Path(id): Path<i64>) -> ApiResult {
+async fn channel_test(
+    State(s): State<Shared>,
+    Extension(UserId(uid)): Extension<UserId>,
+    Path(id): Path<i64>,
+) -> ApiResult {
     let (kind, config): (String, String) = {
         let conn = s.db.lock().unwrap();
-        conn.query_row("SELECT kind, config FROM channels WHERE id = ?", [id], |r| {
+        conn.query_row("SELECT kind, config FROM channels WHERE id = ? AND user_id = ?", [id, uid], |r| {
             Ok((r.get(0)?, r.get(1)?))
         })?
     };

@@ -1,20 +1,3 @@
-const TOKEN_KEY = 'congtodo.token';
-
-export const token = {
-  get(): string {
-    try {
-      return localStorage.getItem(TOKEN_KEY) ?? '';
-    } catch {
-      return '';
-    }
-  },
-  set(v: string) {
-    try {
-      localStorage.setItem(TOKEN_KEY, v);
-    } catch {}
-  },
-};
-
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -24,20 +7,23 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const headers: Record<string, string> = {};
-  if (body !== undefined) headers['content-type'] = 'application/json';
-  const t = token.get();
-  if (t) headers.authorization = `Bearer ${t}`;
+/** 会话失效时的回调（由 store 注册，用于切回登录页） */
+let onUnauthorized = () => {};
+export const setUnauthorizedHandler = (fn: () => void) => (onUnauthorized = fn);
 
+// 会话放在 HttpOnly Cookie 里，同源请求会自动携带
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`/api${path}`, {
     method,
-    headers,
+    headers: body === undefined ? undefined : { 'content-type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (res.status === 204) return undefined as T;
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(res.status, res.status === 401 ? '未授权：请在设置里填写访问令牌' : (data.error ?? res.statusText));
+  if (!res.ok) {
+    if (res.status === 401 && !path.startsWith('/auth/')) onUnauthorized();
+    throw new ApiError(res.status, data.error ?? res.statusText);
+  }
   return data as T;
 }
 

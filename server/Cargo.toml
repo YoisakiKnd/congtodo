@@ -1,6 +1,6 @@
 [package]
 name = "congtodo"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition = "2024"
 
 [dependencies]
@@ -13,6 +13,10 @@ serde_json = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 rust-embed = "8"
 mime_guess = "2"
+argon2 = "0.6"
+sha2 = "0.11"
+getrandom = "0.4"
+hex = "0.4"
 
 [profile.release]
 opt-level = 3

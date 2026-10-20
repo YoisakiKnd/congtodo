@@ -1,0 +1,16 @@
+# 发布用镜像：复制 CI 中按架构原生编译好的二进制（dist/congtodo-linux-<arch>），
+# 目标平台阶段没有 RUN 指令，多架构构建不需要 QEMU 模拟。
+
+FROM --platform=$BUILDPLATFORM busybox:stable AS prep
+RUN mkdir -p /data
+
+FROM gcr.io/distroless/cc-debian12:nonroot
+ARG TARGETARCH
+COPY --from=prep --chown=65532:65532 /data /data
+COPY --chmod=755 dist/congtodo-linux-${TARGETARCH} /congtodo
+ENV CONGTODO_DB=/data/congtodo.db \
+    CONGTODO_ADDR=0.0.0.0:8080 \
+    TZ=Asia/Shanghai
+VOLUME /data
+EXPOSE 8080
+ENTRYPOINT ["/congtodo"]

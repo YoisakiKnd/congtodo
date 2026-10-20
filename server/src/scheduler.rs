@@ -6,6 +6,8 @@ use std::time::Duration;
 use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveTime, TimeZone};
 use rusqlite::Connection;
 
+use std::collections::HashMap;
+
 use crate::{Shared, db::get_setting, notify};
 
 pub fn spawn(state: Shared) {
@@ -23,8 +25,8 @@ pub fn spawn(state: Shared) {
                 })
             };
             last = now;
-            for m in &msgs {
-                notify::broadcast(&state, m).await;
+            for (uid, m) in &msgs {
+                notify::broadcast(&state, *uid, m).await;
             }
         }
     });
@@ -94,43 +96,64 @@ fn repeat_hits(rule: &str, origin: NaiveDate, d: NaiveDate) -> bool {
 
 struct Due {
     key: String,
+    user_id: i64,
     msg: notify::Msg,
 }
 
-fn collect(conn: &Connection, from: i64, to: i64) -> rusqlite::Result<Vec<notify::Msg>> {
+/// 某个设置项在所有用户中的取值：user_id -> value
+fn setting_by_user(conn: &Connection, key: &str) -> rusqlite::Result<HashMap<i64, String>> {
+    let mut stmt = conn.prepare_cached("SELECT user_id, value FROM user_settings WHERE key = ? AND value != ''")?;
+    stmt.query_map([key], |r| Ok((r.get(0)?, r.get(1)?)))?.collect()
+}
+
+fn collect(conn: &Connection, from: i64, to: i64) -> rusqlite::Result<Vec<(i64, notify::Msg)>> {
     let mut due: Vec<Due> = Vec::new();
     let inwin = |t: i64| t > from && t <= to;
 
     // 待办
     let mut stmt = conn.prepare_cached(
-        "SELECT id, title, due_at, remind_at FROM todos
+        "SELECT id, title, due_at, remind_at, user_id FROM todos
          WHERE done = 0 AND remind_at > ?1 AND remind_at <= ?2",
     )?;
     for r in stmt.query_map((from, to), |r| {
-        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<i64>>(2)?, r.get::<_, i64>(3)?))
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, Option<i64>>(2)?,
+            r.get::<_, i64>(3)?,
+            r.get::<_, i64>(4)?,
+        ))
     })? {
-        let (id, title, due_at, remind_at) = r?;
+        let (id, title, due_at, remind_at, user_id) = r?;
         let body = match due_at {
             Some(d) => format!("{title}\n截止：{}", hm(d)),
             None => title,
         };
         due.push(Due {
             key: format!("todo:{id}:{remind_at}"),
+            user_id,
             msg: notify::Msg { title: "📝 待办提醒".into(), body, kind: "todo" },
         });
     }
 
     // 倒计时
     let mut stmt = conn.prepare_cached(
-        "SELECT id, title, target_at, remind_before FROM countdowns
+        "SELECT id, title, target_at, remind_before, user_id FROM countdowns
          WHERE remind_before IS NOT NULL AND target_at - remind_before * 60 > ?1 AND target_at - remind_before * 60 <= ?2",
     )?;
     for r in stmt.query_map((from, to), |r| {
-        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?))
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, i64>(2)?,
+            r.get::<_, i64>(3)?,
+            r.get::<_, i64>(4)?,
+        ))
     })? {
-        let (id, title, target, before) = r?;
+        let (id, title, target, before, user_id) = r?;
         due.push(Due {
             key: format!("countdown:{id}:{target}:{before}"),
+            user_id,
             msg: notify::Msg {
                 title: format!("⏳ {title}"),
                 body: format!("还有 {}（{}）", humanize(before), hm(target)),
@@ -141,7 +164,7 @@ fn collect(conn: &Connection, from: i64, to: i64) -> rusqlite::Result<Vec<notify
 
     // 日程（含重复）
     let mut stmt = conn.prepare_cached(
-        "SELECT id, title, start_at, repeat, remind_before, note FROM events WHERE remind_before IS NOT NULL",
+        "SELECT id, title, start_at, repeat, remind_before, note, user_id FROM events WHERE remind_before IS NOT NULL",
     )?;
     for r in stmt.query_map([], |r| {
         Ok((
@@ -151,9 +174,10 @@ fn collect(conn: &Connection, from: i64, to: i64) -> rusqlite::Result<Vec<notify
             r.get::<_, String>(3)?,
             r.get::<_, i64>(4)?,
             r.get::<_, Option<String>>(5)?,
+            r.get::<_, i64>(6)?,
         ))
     })? {
-        let (id, title, start, repeat, before, note) = r?;
+        let (id, title, start, repeat, before, note, user_id) = r?;
         let lead = before * 60;
         let origin = local(start);
         let occurrences: Vec<i64> = if repeat == "none" {
@@ -173,15 +197,17 @@ fn collect(conn: &Connection, from: i64, to: i64) -> rusqlite::Result<Vec<notify
             }
             due.push(Due {
                 key: format!("event:{id}:{occ}"),
+                user_id,
                 msg: notify::Msg { title: format!("📅 {title}"), body, kind: "event" },
             });
         }
     }
 
-    // 课程
-    if let Some(term_start) = get_setting(conn, "term_start") {
+    // 课程（每个用户有自己的开学日期）
+    let term_starts = setting_by_user(conn, "term_start")?;
+    {
         let mut stmt = conn.prepare_cached(
-            "SELECT id, name, room, teacher, weekday, start_time, end_time, weeks, remind_before
+            "SELECT id, name, room, teacher, weekday, start_time, end_time, weeks, remind_before, user_id
              FROM courses WHERE remind_before IS NOT NULL",
         )?;
         for r in stmt.query_map([], |r| {
@@ -195,12 +221,14 @@ fn collect(conn: &Connection, from: i64, to: i64) -> rusqlite::Result<Vec<notify
                 r.get::<_, String>(6)?,
                 r.get::<_, String>(7)?,
                 r.get::<_, i64>(8)?,
+                r.get::<_, i64>(9)?,
             ))
         })? {
-            let (id, name, room, teacher, weekday, st, et, weeks, before) = r?;
+            let (id, name, room, teacher, weekday, st, et, weeks, before, user_id) = r?;
+            let Some(term_start) = term_starts.get(&user_id) else { continue };
             for d in dates_in(from, to, before * 60) {
                 let ok = d.weekday().number_from_monday() == weekday
-                    && term_week(&term_start, d).is_some_and(|w| in_weeks(&weeks, w));
+                    && term_week(term_start, d).is_some_and(|w| in_weeks(&weeks, w));
                 let Some(occ) = at(d, &st).filter(|o| ok && inwin(o - before * 60)) else { continue };
                 let place = [room.as_deref(), teacher.as_deref()]
                     .into_iter()
@@ -210,6 +238,7 @@ fn collect(conn: &Connection, from: i64, to: i64) -> rusqlite::Result<Vec<notify
                     .join(" · ");
                 due.push(Due {
                     key: format!("course:{id}:{occ}"),
+                    user_id,
                     msg: notify::Msg {
                         title: format!("📚 {name}"),
                         body: format!("{st}-{et}  {place}"),
@@ -222,12 +251,15 @@ fn collect(conn: &Connection, from: i64, to: i64) -> rusqlite::Result<Vec<notify
 
     // 习惯：到点且当天未打卡
     let mut stmt = conn.prepare_cached(
-        "SELECT id, name, remind_time FROM habits WHERE archived = 0 AND remind_time IS NOT NULL AND remind_time != ''",
+        "SELECT id, name, remind_time, user_id FROM habits
+         WHERE archived = 0 AND remind_time IS NOT NULL AND remind_time != ''",
     )?;
     let habits = stmt
-        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?
+        .query_map([], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)?))
+        })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    for (id, name, time) in habits {
+    for (id, name, time, user_id) in habits {
         for d in dates_in(from, to, 0) {
             let Some(fire) = at(d, &time).filter(|t| inwin(*t)) else { continue };
             let day = d.format("%Y-%m-%d").to_string();
@@ -237,6 +269,7 @@ fn collect(conn: &Connection, from: i64, to: i64) -> rusqlite::Result<Vec<notify
             if !done {
                 due.push(Due {
                     key: format!("habit:{id}:{fire}"),
+                    user_id,
                     msg: notify::Msg {
                         title: "✅ 习惯打卡".into(),
                         body: format!("今天还没有完成「{name}」，加油！"),
@@ -248,12 +281,13 @@ fn collect(conn: &Connection, from: i64, to: i64) -> rusqlite::Result<Vec<notify
     }
 
     // 每日概览
-    if let Some(time) = get_setting(conn, "digest_time").filter(|t| !t.is_empty()) {
+    for (user_id, time) in setting_by_user(conn, "digest_time")? {
         for d in dates_in(from, to, 0) {
             if let Some(fire) = at(d, &time).filter(|t| inwin(*t)) {
                 due.push(Due {
-                    key: format!("digest:{fire}"),
-                    msg: notify::Msg { title: "☀️ 今日概览".into(), body: digest(conn, d)?, kind: "digest" },
+                    key: format!("digest:{user_id}:{fire}"),
+                    user_id,
+                    msg: notify::Msg { title: "☀️ 今日概览".into(), body: digest(conn, user_id, d)?, kind: "digest" },
                 });
             }
         }
@@ -263,25 +297,25 @@ fn collect(conn: &Connection, from: i64, to: i64) -> rusqlite::Result<Vec<notify
     let mut out = Vec::with_capacity(due.len());
     for d in due {
         if conn.execute("INSERT OR IGNORE INTO sent_log (key, at) VALUES (?, ?)", (&d.key, to))? == 1 {
-            out.push(d.msg);
+            out.push((d.user_id, d.msg));
         }
     }
     conn.execute("DELETE FROM sent_log WHERE at < ?", [to - 90 * 86400])?;
     Ok(out)
 }
 
-fn digest(conn: &Connection, d: NaiveDate) -> rusqlite::Result<String> {
+fn digest(conn: &Connection, user_id: i64, d: NaiveDate) -> rusqlite::Result<String> {
     let start = at(d, "00:00").unwrap_or_default();
     let end = start + 86400;
     let mut lines = Vec::new();
 
-    if let Some(ts) = get_setting(conn, "term_start") {
+    if let Some(ts) = get_setting(conn, user_id, "term_start") {
         if let Some(w) = term_week(&ts, d) {
             let mut stmt = conn.prepare_cached(
-                "SELECT name, start_time, weeks FROM courses WHERE weekday = ? ORDER BY start_time",
+                "SELECT name, start_time, weeks FROM courses WHERE user_id = ? AND weekday = ? ORDER BY start_time",
             )?;
             let courses: Vec<String> = stmt
-                .query_map([d.weekday().number_from_monday()], |r| {
+                .query_map((user_id, d.weekday().number_from_monday()), |r| {
                     Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
                 })?
                 .flatten()
@@ -295,8 +329,8 @@ fn digest(conn: &Connection, d: NaiveDate) -> rusqlite::Result<String> {
     }
 
     let todo: i64 = conn.query_row(
-        "SELECT count(*) FROM todos WHERE done = 0 AND due_at IS NOT NULL AND due_at < ?",
-        [end],
+        "SELECT count(*) FROM todos WHERE user_id = ? AND done = 0 AND due_at IS NOT NULL AND due_at < ?",
+        [user_id, end],
         |r| r.get(0),
     )?;
     if todo > 0 {
@@ -304,8 +338,8 @@ fn digest(conn: &Connection, d: NaiveDate) -> rusqlite::Result<String> {
     }
 
     let events: i64 = conn.query_row(
-        "SELECT count(*) FROM events WHERE repeat = 'none' AND start_at >= ? AND start_at < ?",
-        [start, end],
+        "SELECT count(*) FROM events WHERE user_id = ? AND repeat = 'none' AND start_at >= ? AND start_at < ?",
+        [user_id, start, end],
         |r| r.get(0),
     )?;
     if events > 0 {
@@ -313,8 +347,8 @@ fn digest(conn: &Connection, d: NaiveDate) -> rusqlite::Result<String> {
     }
 
     if let Ok((title, target)) = conn.query_row(
-        "SELECT title, target_at FROM countdowns WHERE target_at > ? ORDER BY target_at LIMIT 1",
-        [start],
+        "SELECT title, target_at FROM countdowns WHERE user_id = ? AND target_at > ? ORDER BY target_at LIMIT 1",
+        [user_id, start],
         |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
     ) {
         let days = (local(target).date_naive() - d).num_days();
