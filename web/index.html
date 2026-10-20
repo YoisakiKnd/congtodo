@@ -3,14 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#f6f5f2" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#141413" media="(prefers-color-scheme: dark)" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <title>Congtodo</title>
     <script>
-      // 尽早应用主题，避免闪烁
-      try { const t = localStorage.getItem('congtodo.theme'); if (t && t !== 'auto') document.documentElement.dataset.theme = t; } catch {}
+      // 尽早应用深色模式，避免闪烁（与 mode-watcher 的存储键一致）
+      try {
+        const m = localStorage.getItem('mode-watcher-mode');
+        if (m === 'dark' || ((!m || m === 'system') && matchMedia('(prefers-color-scheme: dark)').matches))
+          document.documentElement.classList.add('dark');
+      } catch {}
     </script>
   </head>
   <body>

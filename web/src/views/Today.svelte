@@ -1,6 +1,10 @@
 <script lang="ts">
-  import Icon from '../components/Icon.svelte';
-  import { clock, db, habitLogs, settings, toggleHabit } from '../lib/store.svelte';
+  import { ArrowRight, CalendarDays, CheckSquare, Flame, LayoutGrid } from '@lucide/svelte';
+  import Page from '../components/Page.svelte';
+  import { Badge } from '$lib/components/ui/badge';
+  import * as Card from '$lib/components/ui/card';
+  import { Checkbox } from '$lib/components/ui/checkbox';
+  import { clock, db, habitLogs, settings, toggleHabit } from '$lib/store.svelte';
   import {
     addDays,
     dayDiff,
@@ -16,7 +20,8 @@
     toMinutes,
     toTs,
     ymd,
-  } from '../lib/time';
+  } from '$lib/time';
+  import { cn } from '$lib/utils';
 
   const now = $derived(new Date(clock.minute));
   const today = $derived(startOfDay(now));
@@ -46,237 +51,116 @@
   );
 </script>
 
-<div class="page">
-  <header class="page-head hero">
-    <div>
-      <p class="sub">{fmtDate(now)}{week ? ` · 第 ${week} 周` : ''}</p>
-      <h1>{greeting}</h1>
-    </div>
-  </header>
+{#snippet head(Icon: typeof Flame, title: string, href: string, link: string)}
+  <Card.Header>
+    <Card.Title class="flex items-center gap-2 text-sm"><Icon class="text-muted-foreground size-4" />{title}</Card.Title>
+    <Card.Action>
+      <a {href} class="text-muted-foreground hover:text-primary flex items-center gap-1 text-xs">{link}<ArrowRight class="size-3" /></a>
+    </Card.Action>
+  </Card.Header>
+{/snippet}
 
-  <div class="grid">
+{#snippet empty(text: string)}
+  <p class="text-muted-foreground py-6 text-center text-sm">{text}</p>
+{/snippet}
+
+<Page title={greeting} sub="{fmtDate(now)}{week ? ` · 第 ${week} 周` : ''}">
+  <div class="grid gap-4 md:grid-cols-2">
     {#if countdowns.length}
-      <section class="card span2 cds">
+      <div class="grid grid-cols-3 gap-3 md:col-span-2">
         {#each countdowns as c (c.id)}
-          {@const days = dayDiff(now, fromTs(c.target_at))}
-          <a href="#/countdowns" class="cd" style="--c: {c.color ?? 'var(--accent)'}">
-            <span class="cd-title">{c.title}</span>
-            <span class="cd-days num">{days}<small>天</small></span>
-            <span class="faint">{fmtRelative(c.target_at, now, false)}</span>
+          <a
+            href="#/countdowns"
+            class="rounded-xl p-4 ring-1 ring-foreground/10 transition-transform hover:-translate-y-0.5"
+            style="--c: {c.color ?? 'var(--primary)'}; background: color-mix(in oklch, var(--c) 12%, var(--card))"
+          >
+            <p class="text-muted-foreground truncate text-xs font-medium">{c.title}</p>
+            <p class="num text-3xl font-bold tracking-tight md:text-4xl" style="color: var(--c)">
+              {dayDiff(now, fromTs(c.target_at))}<span class="ml-1 text-sm font-semibold">天</span>
+            </p>
+            <p class="text-muted-foreground truncate text-xs">{fmtRelative(c.target_at, now, false)}</p>
           </a>
         {/each}
-      </section>
+      </div>
     {/if}
 
-    <section class="card">
-      <h2 class="card-title"><Icon name="grid" size={15} /> 今日课程 <a href="#/timetable">课表 →</a></h2>
-      {#each courses as c (c.id)}
-        {@const state = nowMin >= toMinutes(c.end_time) ? 'past' : nowMin >= toMinutes(c.start_time) ? 'now' : ''}
-        <div class="line tint {state}" style="--c: {c.color ?? 'var(--accent)'}">
-          <span class="time num">{c.start_time}<br /><span class="faint">{c.end_time}</span></span>
-          <div class="grow">
-            <b>{c.name}</b>
-            {#if c.room || c.teacher}<div class="faint small">{[c.room, c.teacher].filter(Boolean).join(' · ')}</div>{/if}
+    <Card.Root>
+      {@render head(LayoutGrid, '今日课程', '#/timetable', '课表')}
+      <Card.Content class="grid gap-2">
+        {#each courses as c (c.id)}
+          {@const state = nowMin >= toMinutes(c.end_time) ? 'past' : nowMin >= toMinutes(c.start_time) ? 'now' : ''}
+          <div
+            class={cn('flex items-center gap-3 rounded-lg border-l-3 px-3 py-2', state === 'past' && 'opacity-45')}
+            style="border-color: {c.color}; background: color-mix(in oklch, {c.color} 10%, var(--card))"
+          >
+            <span class="num text-muted-foreground w-10 text-xs leading-tight">{c.start_time}<br />{c.end_time}</span>
+            <div class="min-w-0 flex-1">
+              <p class="font-medium">{c.name}</p>
+              {#if c.room || c.teacher}
+                <p class="text-muted-foreground text-xs">{[c.room, c.teacher].filter(Boolean).join(' · ')}</p>
+              {/if}
+            </div>
+            {#if state === 'now'}<Badge>进行中</Badge>{/if}
           </div>
-          {#if state === 'now'}<span class="badge">进行中</span>{/if}
-        </div>
-      {:else}
-        <p class="empty">今天没有课 🎉</p>
-      {/each}
-    </section>
+        {:else}
+          {@render empty('今天没有课 🎉')}
+        {/each}
+      </Card.Content>
+    </Card.Root>
 
-    <section class="card">
-      <h2 class="card-title"><Icon name="calendar" size={15} /> 今日日程 <a href="#/calendar">日历 →</a></h2>
-      {#each events as e (e.id)}
-        <div class="line tint" style="--c: {e.color ?? 'var(--accent)'}">
-          <span class="time num">{e.all_day ? '全天' : hhmm(fromTs(e.start_at))}</span>
-          <b class="grow">{e.title}</b>
-        </div>
-      {:else}
-        <p class="empty">没有日程安排</p>
-      {/each}
-    </section>
+    <Card.Root>
+      {@render head(CalendarDays, '今日日程', '#/calendar', '日历')}
+      <Card.Content class="grid gap-2">
+        {#each events as e (e.id)}
+          <div
+            class="flex items-center gap-3 rounded-lg border-l-3 px-3 py-2"
+            style="border-color: {e.color}; background: color-mix(in oklch, {e.color} 10%, var(--card))"
+          >
+            <span class="num text-muted-foreground w-10 text-xs">{e.all_day ? '全天' : hhmm(fromTs(e.start_at))}</span>
+            <span class="font-medium">{e.title}</span>
+          </div>
+        {:else}
+          {@render empty('没有日程安排')}
+        {/each}
+      </Card.Content>
+    </Card.Root>
 
-    <section class="card">
-      <h2 class="card-title"><Icon name="todo" size={15} /> 今天要做 <a href="#/todos">全部 →</a></h2>
-      {#each todos as t (t.id)}
-        <div class="todo">
-          <button
-            class="tick"
-            aria-label="完成"
-            onclick={() => db.todos.patch(t.id, { done: 1, done_at: toTs(new Date()) })}
-          ><Icon name="check" size={13} stroke={3} /></button>
-          <span class="grow">{t.title}</span>
-          <span class="small" class:overdue={t.due_at! * 1000 < clock.minute}>{fmtRelative(t.due_at!, now)}</span>
-        </div>
-      {:else}
-        <p class="empty">今天的事都做完了</p>
-      {/each}
-    </section>
+    <Card.Root>
+      {@render head(CheckSquare, '今天要做', '#/todos', '全部')}
+      <Card.Content class="grid">
+        {#each todos as t (t.id)}
+          <label class="flex items-center gap-3 border-b py-2.5 last:border-0">
+            <Checkbox onCheckedChange={() => db.todos.patch(t.id, { done: 1, done_at: toTs(new Date()) })} />
+            <span class="flex-1">{t.title}</span>
+            <span class={cn('num text-xs', t.due_at! * 1000 < clock.minute ? 'text-destructive font-medium' : 'text-muted-foreground')}>
+              {fmtRelative(t.due_at!, now)}
+            </span>
+          </label>
+        {:else}
+          {@render empty('今天的事都做完了')}
+        {/each}
+      </Card.Content>
+    </Card.Root>
 
-    <section class="card">
-      <h2 class="card-title"><Icon name="flame" size={15} /> 习惯打卡 <a href="#/habits">详情 →</a></h2>
-      <div class="habits">
+    <Card.Root>
+      {@render head(Flame, '习惯打卡', '#/habits', '详情')}
+      <Card.Content class="flex-row flex-wrap gap-2">
         {#each habits as h (h.id)}
           {@const on = habitLogs.has(`${h.id}:${todayStr}`)}
-          <button class="habit" class:on style="--c: {h.color ?? 'var(--accent)'}" onclick={() => toggleHabit(h.id, todayStr)}>
-            <span class="emoji">{h.icon || '✨'}</span>
-            <span>{h.name}</span>
+          <button
+            class={cn(
+              'flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm transition-all active:scale-95',
+              on ? 'text-white' : 'bg-muted hover:bg-accent',
+            )}
+            style={on ? `background: ${h.color}` : ''}
+            onclick={() => toggleHabit(h.id, todayStr)}
+          >
+            <span>{h.icon || '✨'}</span>{h.name}
           </button>
         {:else}
-          <p class="empty">还没有习惯，去添加一个吧</p>
+          <div class="w-full">{@render empty('还没有习惯，去添加一个吧')}</div>
         {/each}
-      </div>
-    </section>
+      </Card.Content>
+    </Card.Root>
   </div>
-</div>
-
-<style>
-  .hero h1 {
-    font-size: 30px;
-  }
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 16px;
-  }
-  .span2 {
-    grid-column: span 2;
-  }
-  .small {
-    font-size: 12px;
-  }
-
-  .cds {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 12px;
-    padding: 12px;
-  }
-  .cd {
-    display: grid;
-    gap: 2px;
-    padding: 14px 16px;
-    border-radius: 14px;
-    background: color-mix(in srgb, var(--c) 10%, var(--surface));
-    transition: transform 0.15s var(--ease);
-  }
-  .cd:hover {
-    transform: translateY(-2px);
-  }
-  .cd-title {
-    font-size: 13px;
-    color: var(--text-2);
-    font-weight: 500;
-  }
-  .cd-days {
-    font-size: 34px;
-    font-weight: 750;
-    line-height: 1.15;
-    color: var(--c);
-    letter-spacing: -0.02em;
-  }
-  .cd-days small {
-    font-size: 14px;
-    margin-left: 3px;
-    font-weight: 600;
-  }
-
-  .line {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 9px 12px;
-    border-radius: 10px;
-    margin-bottom: 8px;
-    font-size: 14px;
-  }
-  .line.past {
-    opacity: 0.45;
-  }
-  .line.now {
-    box-shadow: 0 0 0 1.5px var(--c);
-  }
-  .time {
-    font-size: 12px;
-    color: var(--text-2);
-    min-width: 38px;
-    line-height: 1.35;
-  }
-  .badge {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--c);
-  }
-
-  .todo {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 2px;
-    font-size: 14px;
-    border-bottom: 1px solid var(--border);
-  }
-  .todo:last-child {
-    border-bottom: 0;
-  }
-  .overdue {
-    color: var(--danger);
-  }
-
-  .habits {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-  .habit {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 8px 14px;
-    border-radius: 999px;
-    background: var(--surface-2);
-    font-size: 14px;
-    transition:
-      background 0.2s var(--ease),
-      color 0.2s,
-      transform 0.1s;
-  }
-  .habit:active {
-    transform: scale(0.95);
-  }
-  .habit.on {
-    background: var(--c);
-    color: #fff;
-  }
-  .habits .empty {
-    width: 100%;
-  }
-
-  @media (max-width: 760px) {
-    .grid {
-      grid-template-columns: minmax(0, 1fr);
-    }
-    .span2 {
-      grid-column: auto;
-    }
-    .cds {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 8px;
-      padding: 8px;
-    }
-    .cd {
-      padding: 10px 12px;
-    }
-    .cd-days {
-      font-size: 26px;
-    }
-    .cd-title,
-    .cd .faint {
-      font-size: 12px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-  }
-</style>
+</Page>

@@ -4,7 +4,7 @@
 
 - **单二进制**：Rust 后端 + 内嵌 Svelte 前端，约 7MB
 - **低占用**：单线程 tokio，常驻内存约 7MB
-- **轻前端**：零 UI 库、零图标库，JS+CSS gzip 后约 38KB；浅色 / 深色主题；桌面侧栏 / 移动端底栏
+- **前端**：Svelte 5 + [shadcn-svelte](https://shadcn-svelte.com)（Tailwind v4）+ [Schedule-X](https://schedule-x.dev)（shadcn 主题）日历 / 课表；浅色 / 深色主题；桌面侧栏 / 移动端底栏
 - **离线也能提醒**：调度器在服务端运行，浏览器关了照样推送
 
 ## 快速开始
@@ -57,13 +57,19 @@ server/src/
   notify.rs     推送渠道实现
   web.rs        前端静态资源
 web/src/
-  App.svelte            外壳与路由表
-  app.css               设计令牌（颜色/圆角/阴影，暗色模式）
+  App.svelte            外壳与路由表（侧栏 / 底栏、ModeWatcher、Toaster）
+  app.css               shadcn 主题令牌 + Schedule-X 配色映射
   lib/store.svelte.ts   全局状态：clock、route、Collection、settings、habitLogs
   lib/time.ts           日期工具；occursOn/inWeeks 与后端规则一致
-  components/           Sheet(原生 dialog) ColorPick RemindSelect Icon
+  lib/schedule.ts       日程 / 课程 / 待办 → Schedule-X 事件（按可见范围展开重复规则）
+  lib/components/ui/    shadcn-svelte 组件（由 CLI 生成，可直接改）
+  components/           ScheduleX（日历封装）Sheet（表单对话框）Field Choice ColorPick Page
   views/                各功能页面
 ```
+
+添加更多 shadcn 组件：`cd web && npx shadcn-svelte@latest add <组件名>`。
+
+日历使用 Schedule-X 的框架无关 API（`createCalendar().render(el)`）而非 `@schedule-x/svelte` 适配器——后者尚未支持 v4。v4 的拖拽插件转为付费版，所以日程通过点击 / 双击打开对话框编辑。
 
 ### API
 

@@ -1,4 +1,5 @@
 import { SvelteSet } from 'svelte/reactivity';
+import { toast } from 'svelte-sonner';
 import { api } from './api';
 import { addDays, ymd } from './time';
 import type { CalEvent, Channel, Countdown, Course, Habit, Todo } from './types';
@@ -20,15 +21,8 @@ addEventListener('hashchange', () => (route.path = readHash()));
 
 // ---------- 提示 ----------
 
-export const toast = $state({ msg: '' });
-let toastTimer: ReturnType<typeof setTimeout>;
-export function notify(msg: string) {
-  toast.msg = msg;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (toast.msg = ''), 2800);
-}
 const fail = (e: unknown) => {
-  notify(e instanceof Error ? e.message : String(e));
+  toast.error(e instanceof Error ? e.message : String(e));
   throw e;
 };
 

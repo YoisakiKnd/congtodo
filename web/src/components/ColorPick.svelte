@@ -1,42 +1,23 @@
 <script lang="ts">
-  import { PALETTE } from '../lib/store.svelte';
+  import { PALETTE } from '$lib/store.svelte';
+  import { cn } from '$lib/utils';
 
   let { value = $bindable() }: { value: string | null | undefined } = $props();
 </script>
 
-<div class="swatches" role="radiogroup" aria-label="颜色">
-  {#each PALETTE as c}
+<div class="flex flex-wrap gap-2" role="radiogroup" aria-label="颜色">
+  {#each PALETTE as c (c)}
     <button
       type="button"
       role="radio"
       aria-checked={value === c}
       aria-label={c}
-      class:on={value === c}
-      style="--c: {c}"
+      class={cn(
+        'size-7 rounded-full ring-offset-2 ring-offset-background transition-transform hover:scale-110',
+        value === c && 'ring-2',
+      )}
+      style="background: {c}; --tw-ring-color: {c}"
       onclick={() => (value = c)}
     ></button>
   {/each}
 </div>
-
-<style>
-  .swatches {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-  button {
-    width: 26px;
-    height: 26px;
-    border-radius: 50%;
-    background: var(--c);
-    box-shadow: 0 0 0 2px var(--surface) inset;
-    border: 2px solid transparent;
-    transition: transform 0.12s;
-  }
-  button:hover {
-    transform: scale(1.1);
-  }
-  button.on {
-    border-color: var(--c);
-  }
-</style>

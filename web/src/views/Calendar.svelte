@@ -1,68 +1,56 @@
 <script lang="ts">
-  import ColorPick from '../components/ColorPick.svelte';
-  import Icon from '../components/Icon.svelte';
-  import RemindSelect from '../components/RemindSelect.svelte';
-  import Sheet from '../components/Sheet.svelte';
-  import { clock, db, PALETTE, settings } from '../lib/store.svelte';
+  import { Plus } from '@lucide/svelte';
   import {
-    addDays,
-    fmtDate,
-    fromInput,
-    fromTs,
-    hhmm,
-    inWeeks,
-    isoWeekday,
-    occursOn,
-    parseYmd,
-    startOfDay,
-    startOfWeek,
-    termWeek,
-    toInput,
-    toTs,
-    WEEKDAYS,
-    ymd,
-  } from '../lib/time';
-  import type { CalEvent, Repeat } from '../lib/types';
+    createViewDay,
+    createViewMonthAgenda,
+    createViewMonthGrid,
+    createViewWeek,
+    type CalendarConfig,
+  } from '@schedule-x/calendar';
+  import Choice from '../components/Choice.svelte';
+  import ColorPick from '../components/ColorPick.svelte';
+  import Field from '../components/Field.svelte';
+  import Page from '../components/Page.svelte';
+  import ScheduleX from '../components/ScheduleX.svelte';
+  import Sheet from '../components/Sheet.svelte';
+  import { Button } from '$lib/components/ui/button';
+  import * as Card from '$lib/components/ui/card';
+  import { Input } from '$lib/components/ui/input';
+  import { Switch } from '$lib/components/ui/switch';
+  import { Textarea } from '$lib/components/ui/textarea';
+  import { courseInstances, eventInstances, todoInstances, toDate, type EventRef, type Range } from '$lib/schedule';
+  import { db, PALETTE, settings } from '$lib/store.svelte';
+  import { fromInput, fromTs, hhmm, parseYmd, REMIND_OPTIONS, toInput, toTs, ymd } from '$lib/time';
+  import type { CalEvent, Repeat } from '$lib/types';
 
-  const today = $derived(startOfDay(new Date(clock.minute)));
-  let cursor = $state(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
-  let selected = $state(startOfDay(new Date()));
+  let showCourses = $state(false);
+  let showTodos = $state(true);
 
-  const cells = $derived.by(() => {
-    const first = startOfWeek(cursor);
-    return Array.from({ length: 42 }, (_, i) => {
-      const d = addDays(first, i);
-      const key = ymd(d);
-      return {
-        d,
-        key,
-        events: db.events.items.filter((e) => occursOn(e, d)),
-        todos: db.todos.items.filter((t) => !t.done && t.due_at && ymd(fromTs(t.due_at)) === key).length,
-      };
-    });
-  });
+  const build = (r: Range) => [
+    ...eventInstances(db.events.items, r),
+    ...(showTodos ? todoInstances(db.todos.items, r) : []),
+    ...(showCourses ? courseInstances(db.courses.items, r, settings.term_start, false) : []),
+  ];
 
-  const dayEvents = $derived(
-    db.events.items
-      .filter((e) => occursOn(e, selected))
-      .toSorted((a, b) => b.all_day - a.all_day || hhmm(fromTs(a.start_at)).localeCompare(hhmm(fromTs(b.start_at)))),
-  );
-  const dayTodos = $derived(db.todos.items.filter((t) => t.due_at && ymd(fromTs(t.due_at)) === ymd(selected)));
-  const dayCourses = $derived.by(() => {
-    const w = termWeek(settings.term_start, selected);
-    if (w == null) return [];
-    return db.courses.items
-      .filter((c) => c.weekday === isoWeekday(selected) && inWeeks(c.weeks, w))
-      .toSorted((a, b) => a.start_time.localeCompare(b.start_time));
-  });
+  const config: CalendarConfig = {
+    views: [createViewMonthGrid(), createViewWeek(), createViewDay(), createViewMonthAgenda()],
+    defaultView: 'month-grid',
+    weekOptions: { gridHeight: 1100 },
+    monthGridOptions: { nEventsPerDay: 4 },
+    callbacks: {
+      onEventClick(ev) {
+        const ref = ev.ref as EventRef;
+        if (ref.kind === 'event') {
+          const e = db.events.items.find((x) => x.id === ref.id);
+          if (e) edit(e);
+        } else location.hash = ref.kind === 'todo' ? '#/todos' : '#/timetable';
+      },
+      onDoubleClickDate: (d) => create(toDate(d), true),
+      onDoubleClickDateTime: (d) => create(toDate(d), false),
+    },
+  };
 
-  function shift(n: number) {
-    cursor = new Date(cursor.getFullYear(), cursor.getMonth() + n, 1);
-  }
-  function goToday() {
-    cursor = new Date(today.getFullYear(), today.getMonth(), 1);
-    selected = today;
-  }
+  // ---------- 日程表单 ----------
 
   const REPEATS: { value: Repeat; label: string }[] = [
     { value: 'none', label: '不重复' },
@@ -72,7 +60,7 @@
     { value: 'yearly', label: '每年' },
   ];
 
-  let open = $state(false);
+  let sheet = $state(false);
   let form = $state({
     id: 0,
     title: '',
@@ -85,25 +73,38 @@
     note: '',
   });
 
-  function edit(e?: CalEvent) {
-    if (e) {
-      const allDay = !!e.all_day;
-      const conv = (ts: number | null) => (allDay ? (ts ? ymd(fromTs(ts)) : '') : toInput(ts));
-      form = { ...e, all_day: allDay, start: conv(e.start_at), end: conv(e.end_at), note: e.note ?? '' };
-    } else {
-      form = {
-        id: 0,
-        title: '',
-        all_day: false,
-        start: `${ymd(selected)}T09:00`,
-        end: `${ymd(selected)}T10:00`,
-        repeat: 'none',
-        remind_before: 15,
-        color: PALETTE[0],
-        note: '',
-      };
-    }
-    open = true;
+  function create(at: Date, dateOnly: boolean) {
+    const start = dateOnly ? new Date(at.getFullYear(), at.getMonth(), at.getDate(), 9) : at;
+    const end = new Date(start.getTime() + 3600_000);
+    form = {
+      id: 0,
+      title: '',
+      all_day: false,
+      start: `${ymd(start)}T${hhmm(start)}`,
+      end: `${ymd(end)}T${hhmm(end)}`,
+      repeat: 'none',
+      remind_before: 15,
+      color: PALETTE[0],
+      note: '',
+    };
+    sheet = true;
+  }
+
+  function edit(e: CalEvent) {
+    const allDay = !!e.all_day;
+    const conv = (ts: number | null) => (allDay ? (ts ? ymd(fromTs(ts)) : '') : toInput(ts));
+    form = {
+      id: e.id,
+      title: e.title,
+      all_day: allDay,
+      start: conv(e.start_at),
+      end: conv(e.end_at),
+      repeat: e.repeat,
+      remind_before: e.remind_before,
+      color: e.color,
+      note: e.note ?? '',
+    };
+    sheet = true;
   }
 
   function setAllDay(v: boolean) {
@@ -129,240 +130,37 @@
   }
 </script>
 
-<div class="page">
-  <header class="page-head">
-    <h1 class="num">{cursor.getFullYear()}年{cursor.getMonth() + 1}月</h1>
-    <span class="grow"></span>
-    <button class="btn icon ghost" aria-label="上个月" onclick={() => shift(-1)}><Icon name="left" /></button>
-    <button class="btn sm" onclick={goToday}>今天</button>
-    <button class="btn icon ghost" aria-label="下个月" onclick={() => shift(1)}><Icon name="right" /></button>
-    <button class="btn primary" onclick={() => edit()}><Icon name="plus" size={16} /> 日程</button>
-  </header>
+<Page title="日历" class="max-w-7xl">
+  {#snippet actions()}
+    <label class="flex items-center gap-2 text-sm"><Switch bind:checked={showTodos} />待办</label>
+    <label class="flex items-center gap-2 text-sm"><Switch bind:checked={showCourses} />课程</label>
+    <Button onclick={() => create(new Date(), true)}><Plus />日程</Button>
+  {/snippet}
 
-  <div class="layout">
-    <div class="card month">
-      {#each WEEKDAYS as w}<div class="wd">{w}</div>{/each}
-      {#each cells as c (c.key)}
-        <button
-          class="cell"
-          class:other={c.d.getMonth() !== cursor.getMonth()}
-          class:today={c.key === ymd(today)}
-          class:sel={c.key === ymd(selected)}
-          onclick={() => (selected = c.d)}
-          ondblclick={() => edit()}
-        >
-          <span class="n num">{c.d.getDate()}</span>
-          <span class="evs">
-            {#each c.events.slice(0, 3) as e (e.id)}
-              <span class="ev" style="--c: {e.color ?? 'var(--accent)'}">{e.title}</span>
-            {/each}
-            {#if c.events.length > 3}<span class="more">+{c.events.length - 3}</span>{/if}
-          </span>
-          {#if c.todos}<span class="todo-dot" title="{c.todos} 项待办到期"></span>{/if}
-        </button>
-      {/each}
-    </div>
+  <Card.Root class="p-0">
+    <ScheduleX {config} {build} />
+  </Card.Root>
+  <p class="text-muted-foreground mt-3 text-xs">双击日期或时间格可快速新建日程</p>
+</Page>
 
-    <aside class="card agenda">
-      <h2 class="card-title">{fmtDate(selected)}</h2>
-      {#each dayEvents as e (e.id)}
-        <button class="row tint" style="--c: {e.color ?? 'var(--accent)'}" onclick={() => edit(e)}>
-          <span class="t num">{e.all_day ? '全天' : hhmm(fromTs(e.start_at))}</span>
-          <span class="grow">{e.title}</span>
-          {#if e.remind_before != null}<Icon name="bell" size={13} />{/if}
-        </button>
-      {/each}
-      {#each dayCourses as c (c.id)}
-        <div class="row course" style="--c: {c.color ?? 'var(--accent)'}">
-          <span class="t num">{c.start_time}</span>
-          <span class="grow">{c.name}</span>
-          <span class="faint">{c.room ?? ''}</span>
-        </div>
-      {/each}
-      {#each dayTodos as t (t.id)}
-        <div class="row" class:done={t.done}>
-          <span class="t"><Icon name="todo" size={14} /></span>
-          <span class="grow">{t.title}</span>
-        </div>
-      {/each}
-      {#if !dayEvents.length && !dayCourses.length && !dayTodos.length}
-        <p class="empty">这一天空空如也<br /><span class="hint">双击日期可快速新建</span></p>
-      {/if}
-    </aside>
-  </div>
-</div>
-
-<Sheet bind:open title={form.id ? '编辑日程' : '新建日程'} onsave={save} ondelete={form.id ? () => db.events.remove(form.id) : undefined}>
-  <label class="field">标题<input required bind:value={form.title} /></label>
-  <label class="check"><input type="checkbox" checked={form.all_day} onchange={(e) => setAllDay(e.currentTarget.checked)} /> 全天</label>
-  <div class="row">
+<Sheet bind:open={sheet} title={form.id ? '编辑日程' : '新建日程'} onsave={save} ondelete={form.id ? () => db.events.remove(form.id) : undefined}>
+  <Field label="标题"><Input required bind:value={form.title} /></Field>
+  <label class="flex items-center gap-3 text-sm">
+    <Switch checked={form.all_day} onCheckedChange={setAllDay} />全天
+  </label>
+  <div class="grid grid-cols-2 gap-3">
     {#if form.all_day}
-      <label class="field">开始<input required type="date" bind:value={form.start} /></label>
-      <label class="field">结束<input type="date" bind:value={form.end} /></label>
+      <Field label="开始"><Input required type="date" bind:value={form.start} /></Field>
+      <Field label="结束"><Input type="date" bind:value={form.end} /></Field>
     {:else}
-      <label class="field">开始<input required type="datetime-local" bind:value={form.start} /></label>
-      <label class="field">结束<input type="datetime-local" bind:value={form.end} /></label>
+      <Field label="开始"><Input required type="datetime-local" bind:value={form.start} /></Field>
+      <Field label="结束"><Input type="datetime-local" bind:value={form.end} /></Field>
     {/if}
   </div>
-  <div class="row">
-    <label class="field">
-      重复
-      <select bind:value={form.repeat}>
-        {#each REPEATS as r}<option value={r.value}>{r.label}</option>{/each}
-      </select>
-    </label>
-    <RemindSelect bind:value={form.remind_before} />
+  <div class="grid grid-cols-2 gap-3">
+    <Field label="重复"><Choice bind:value={form.repeat} options={REPEATS} /></Field>
+    <Field label="提醒"><Choice bind:value={form.remind_before} options={REMIND_OPTIONS} /></Field>
   </div>
-  <div class="field">颜色<ColorPick bind:value={form.color} /></div>
-  <label class="field">备注<textarea bind:value={form.note}></textarea></label>
+  <div class="grid gap-2"><span class="text-sm font-medium">颜色</span><ColorPick bind:value={form.color} /></div>
+  <Field label="备注"><Textarea bind:value={form.note} /></Field>
 </Sheet>
-
-<style>
-  .layout {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 300px;
-    gap: 16px;
-    align-items: start;
-  }
-  .month {
-    display: grid;
-    grid-template-columns: repeat(7, minmax(0, 1fr));
-    gap: 4px;
-    padding: 12px;
-  }
-  .wd {
-    text-align: center;
-    font-size: 12px;
-    color: var(--text-3);
-    padding: 4px 0 8px;
-    font-weight: 600;
-  }
-  .cell {
-    position: relative;
-    min-height: 92px;
-    padding: 6px;
-    border-radius: 10px;
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 3px;
-    text-align: left;
-    transition: background 0.12s;
-  }
-  .cell:hover {
-    background: var(--surface-2);
-  }
-  .cell.other {
-    opacity: 0.38;
-  }
-  .cell.sel {
-    background: var(--accent-soft);
-  }
-  .n {
-    width: 26px;
-    height: 26px;
-    display: grid;
-    place-items: center;
-    border-radius: 50%;
-    font-size: 13px;
-    font-weight: 600;
-  }
-  .today .n {
-    background: var(--accent);
-    color: var(--on-accent);
-  }
-  .evs {
-    display: grid;
-    gap: 2px;
-    min-width: 0;
-  }
-  .ev {
-    font-size: 11px;
-    line-height: 1.6;
-    padding: 0 5px;
-    border-radius: 4px;
-    background: color-mix(in srgb, var(--c) 18%, transparent);
-    color: color-mix(in srgb, var(--c) 75%, var(--text));
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .more {
-    font-size: 11px;
-    color: var(--text-3);
-    padding-left: 4px;
-  }
-  .todo-dot {
-    position: absolute;
-    top: 10px;
-    right: 8px;
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--warn);
-  }
-
-  .agenda {
-    position: sticky;
-    top: 20px;
-  }
-  .agenda .row {
-    width: 100%;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 9px 12px;
-    border-radius: 10px;
-    margin-bottom: 6px;
-    font-size: 14px;
-    text-align: left;
-  }
-  .course {
-    background: var(--surface-2);
-  }
-  .agenda .done {
-    color: var(--text-3);
-    text-decoration: line-through;
-  }
-  .t {
-    font-size: 12px;
-    color: var(--text-2);
-    min-width: 36px;
-    display: flex;
-  }
-
-  @media (max-width: 900px) {
-    .layout {
-      grid-template-columns: minmax(0, 1fr);
-    }
-    .agenda {
-      position: static;
-    }
-  }
-  @media (max-width: 760px) {
-    .month {
-      padding: 6px;
-      gap: 2px;
-    }
-    .cell {
-      min-height: 54px;
-      padding: 3px;
-      align-items: center;
-    }
-    .ev {
-      width: 6px;
-      height: 6px;
-      padding: 0;
-      font-size: 0;
-      border-radius: 50%;
-      background: var(--c);
-    }
-    .evs {
-      display: flex;
-      gap: 2px;
-    }
-    .more {
-      display: none;
-    }
-  }
-</style>
