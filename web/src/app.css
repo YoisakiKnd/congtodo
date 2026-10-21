@@ -169,3 +169,55 @@
 	opacity: 0.35;
 	filter: grayscale(1);
 }
+
+/* 日历格子：农历 / 节日 / 法定假日角标 */
+.cx-date {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	justify-content: center;
+}
+.cx-sub {
+	font-size: 11px;
+	line-height: 1;
+	color: var(--muted-foreground);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	max-width: 4.5em;
+}
+.cx-sub.is-fest {
+	color: var(--primary);
+	font-weight: 500;
+}
+.cx-badge {
+	font-size: 10px;
+	line-height: 1;
+	padding: 2px 3px;
+	border-radius: 4px;
+	font-weight: 600;
+}
+.cx-badge.is-off {
+	background: color-mix(in oklch, var(--destructive) 15%, transparent);
+	color: var(--destructive);
+}
+.cx-badge.is-work {
+	background: var(--muted);
+	color: var(--muted-foreground);
+}
+.cx-week-sub {
+	display: flex;
+	gap: 4px;
+	align-items: center;
+	justify-content: center;
+	margin-top: 2px;
+}
+@media (max-width: 640px) {
+	.cx-date {
+		flex-direction: column;
+		gap: 1px;
+	}
+	.cx-sub {
+		font-size: 9px;
+	}
+}

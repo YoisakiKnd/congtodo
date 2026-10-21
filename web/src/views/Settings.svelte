@@ -1,266 +1,34 @@
 <script lang="ts">
-  import { Bell, ChevronRight, LogOut, Monitor, Moon, Plus, Send, Sun, Users } from '@lucide/svelte';
-  import { setMode, userPrefersMode } from 'mode-watcher';
-  import { toast } from 'svelte-sonner';
-  import Field from '../components/Field.svelte';
+  import { ChevronRight, Users } from '@lucide/svelte';
   import Page from '../components/Page.svelte';
-  import Sheet from '../components/Sheet.svelte';
-  import { Badge } from '$lib/components/ui/badge';
-  import { Button } from '$lib/components/ui/button';
   import * as Card from '$lib/components/ui/card';
-  import { Input } from '$lib/components/ui/input';
-  import { Switch } from '$lib/components/ui/switch';
-  import { Textarea } from '$lib/components/ui/textarea';
-  import * as ToggleGroup from '$lib/components/ui/toggle-group';
-  import { api } from '$lib/api';
-  import { auth, changePassword, db, saveSettings, settings, signOut } from '$lib/store.svelte';
-  import type { Channel, ChannelKind } from '$lib/types';
-
-  // ---------- 账号 ----------
-  let pw = $state({ old: '', next: '', confirm: '' });
-  async function submitPassword(e: SubmitEvent) {
-    e.preventDefault();
-    if (pw.next !== pw.confirm) return toast.error('两次输入的新密码不一致');
-    try {
-      await changePassword(pw.old, pw.next);
-      pw = { old: '', next: '', confirm: '' };
-      toast.success('密码已修改，其他设备需要重新登录');
-    } catch (err) {
-      toast.error((err as Error).message);
-    }
-  }
-
-  // ---------- 通用设置 ----------
-  let general = $state({ term_start: '', digest_time: '' });
-  $effect(() => {
-    general = { term_start: settings.term_start ?? '', digest_time: settings.digest_time ?? '' };
-  });
-
-  // ---------- 通知渠道 ----------
-  type FieldDef = { key: string; label: string; placeholder?: string; required?: boolean };
-  const KINDS: Record<ChannelKind, { label: string; desc: string; badge: string; fields: FieldDef[] }> = {
-    ntfy: {
-      label: 'ntfy',
-      desc: '开源推送，支持自建，全平台 App',
-      badge: 'bg-teal-500/15 text-teal-700 dark:text-teal-400',
-      fields: [
-        { key: 'server', label: '服务器', placeholder: 'https://ntfy.sh' },
-        { key: 'topic', label: 'Topic', required: true, placeholder: '一个难猜的名字' },
-        { key: 'token', label: 'Access Token（可选）' },
-        { key: 'priority', label: '优先级 1-5', placeholder: '3' },
-      ],
-    },
-    bark: {
-      label: 'Bark',
-      desc: 'iOS 推送，支持自建服务器',
-      badge: 'bg-red-500/15 text-red-700 dark:text-red-400',
-      fields: [
-        { key: 'server', label: '服务器', placeholder: 'https://api.day.app' },
-        { key: 'key', label: 'Device Key', required: true },
-        { key: 'group', label: '分组', placeholder: 'Congtodo' },
-        { key: 'sound', label: '铃声', placeholder: 'minuet' },
-        { key: 'level', label: '级别', placeholder: 'active / timeSensitive / critical' },
-      ],
-    },
-    webhook: {
-      label: 'Webhook',
-      desc: '企业微信 / 飞书 / 钉钉 / Discord / Telegram / 自定义',
-      badge: 'bg-primary/15 text-primary',
-      fields: [
-        { key: 'url', label: 'URL', required: true, placeholder: 'https://…' },
-        { key: 'method', label: '方法', placeholder: 'POST' },
-      ],
-    },
-  };
-
-  const PRESETS: Record<string, string> = {
-    企业微信: '{"msgtype":"text","text":{"content":"{{title}}\\n{{body}}"}}',
-    钉钉: '{"msgtype":"text","text":{"content":"{{title}}\\n{{body}}"}}',
-    飞书: '{"msg_type":"text","content":{"text":"{{title}}\\n{{body}}"}}',
-    Discord: '{"content":"**{{title}}**\\n{{body}}"}',
-    Telegram: '{"chat_id":"<CHAT_ID>","text":"{{title}}\\n{{body}}"}',
-  };
-
-  let sheet = $state(false);
-  let form = $state({ id: 0, name: '', kind: 'ntfy' as ChannelKind, enabled: 1, cfg: {} as Record<string, string>, headers: '' });
-
-  function edit(c?: Channel, kind: ChannelKind = 'ntfy') {
-    if (c) {
-      const { headers, ...rest } = c.config ?? {};
-      form = {
-        id: c.id,
-        name: c.name,
-        kind: c.kind,
-        enabled: c.enabled,
-        cfg: Object.fromEntries(Object.entries(rest).map(([k, v]) => [k, String(v ?? '')])),
-        headers: headers ? JSON.stringify(headers, null, 2) : '',
-      };
-    } else {
-      form = { id: 0, name: KINDS[kind].label, kind, enabled: 1, cfg: {}, headers: '' };
-    }
-    sheet = true;
-  }
-
-  function saveChannel() {
-    const config: Record<string, unknown> = Object.fromEntries(Object.entries(form.cfg).filter(([, v]) => v !== ''));
-    if (config.priority) config.priority = Number(config.priority);
-    if (form.kind === 'webhook' && form.headers.trim()) {
-      try {
-        config.headers = JSON.parse(form.headers);
-      } catch {
-        toast.error('Headers 不是合法 JSON');
-        throw new Error('invalid headers');
-      }
-    }
-    return db.channels.save({ id: form.id || undefined, name: form.name.trim(), kind: form.kind, enabled: form.enabled, config });
-  }
-
-  let testing = $state(0);
-  async function test(c: Channel) {
-    testing = c.id;
-    try {
-      await api.post(`/channels/${c.id}/test`);
-      toast.success(`「${c.name}」发送成功`);
-    } catch (e) {
-      toast.error(`发送失败：${(e as Error).message}`);
-    } finally {
-      testing = 0;
-    }
-  }
+  import { auth } from '$lib/store.svelte';
+  import Account from './settings/Account.svelte';
+  import Calendars from './settings/Calendars.svelte';
+  import Channels from './settings/Channels.svelte';
+  import Data from './settings/Data.svelte';
+  import General from './settings/General.svelte';
 </script>
 
 <Page title="设置" class="max-w-3xl">
   <div class="grid gap-4">
-    <Card.Root>
-      <Card.Header><Card.Title>外观</Card.Title></Card.Header>
-      <Card.Content>
-        <ToggleGroup.Root
-          type="single"
-          variant="outline"
-          value={userPrefersMode.current}
-          onValueChange={(v) => v && setMode(v as 'light' | 'dark' | 'system')}
-        >
-          <ToggleGroup.Item value="system"><Monitor />跟随系统</ToggleGroup.Item>
-          <ToggleGroup.Item value="light"><Sun />浅色</ToggleGroup.Item>
-          <ToggleGroup.Item value="dark"><Moon />深色</ToggleGroup.Item>
-        </ToggleGroup.Root>
-      </Card.Content>
-    </Card.Root>
-
-    <Card.Root>
-      <Card.Header>
-        <Card.Title>学期与每日概览</Card.Title>
-        <Card.Description>开学日期所在周记为第 1 周；概览时间留空则不推送</Card.Description>
-      </Card.Header>
-      <Card.Content>
-        <form
-          class="grid gap-4"
-          onsubmit={(e) => (e.preventDefault(), saveSettings(general).then(() => toast.success('已保存')))}
-        >
-          <div class="grid grid-cols-2 gap-3">
-            <Field label="开学日期"><Input type="date" bind:value={general.term_start} /></Field>
-            <Field label="每日概览推送"><Input type="time" bind:value={general.digest_time} /></Field>
-          </div>
-          <div><Button type="submit" size="sm">保存</Button></div>
-        </form>
-      </Card.Content>
-    </Card.Root>
-
-    <Card.Root>
-      <Card.Header>
-        <Card.Title class="flex items-center gap-2"><Bell class="size-4" />通知渠道</Card.Title>
-        <Card.Description>提醒会推送到所有已启用的渠道</Card.Description>
-      </Card.Header>
-      <Card.Content class="grid gap-4">
-        {#if db.channels.items.length}
-          <div class="divide-y rounded-lg border">
-            {#each db.channels.items as c (c.id)}
-              <div class="flex items-center gap-3 px-3 py-2.5">
-                <Badge variant="secondary" class="w-18 justify-center {KINDS[c.kind]?.badge}">{KINDS[c.kind]?.label ?? c.kind}</Badge>
-                <button class="min-w-0 flex-1 truncate text-left font-medium" onclick={() => edit(c)}>{c.name}</button>
-                <Switch
-                  checked={!!c.enabled}
-                  onCheckedChange={(v) => db.channels.patch(c.id, { enabled: +v })}
-                  aria-label="启用"
-                />
-                <Button variant="outline" size="sm" disabled={testing === c.id} onclick={() => test(c)}><Send />测试</Button>
-              </div>
-            {/each}
-          </div>
-        {/if}
-        <div class="grid gap-3 sm:grid-cols-3">
-          {#each Object.entries(KINDS) as [k, v] (k)}
-            <button
-              class="hover:border-primary hover:bg-primary/5 grid gap-1 rounded-lg border border-dashed p-3 text-left transition-colors"
-              onclick={() => edit(undefined, k as ChannelKind)}
-            >
-              <span class="flex items-center gap-1.5 text-sm font-semibold"><Plus class="size-3.5" />{v.label}</span>
-              <span class="text-muted-foreground text-xs">{v.desc}</span>
-            </button>
-          {/each}
-        </div>
-      </Card.Content>
-    </Card.Root>
+    <General />
+    <Channels />
+    <Calendars />
+    <Data />
 
     {#if auth.user?.is_admin}
       <a href="#/admin" class="block">
         <Card.Root class="hover:ring-primary/40 transition-shadow">
           <Card.Header>
             <Card.Title class="flex items-center gap-2"><Users class="size-4" />用户管理</Card.Title>
-            <Card.Description>创建账号、重置密码、停用或删除用户、修改注册策略</Card.Description>
+            <Card.Description>创建账号、重置密码、停用或删除用户、修改注册策略、备份数据库</Card.Description>
             <Card.Action><ChevronRight class="text-muted-foreground size-4" /></Card.Action>
           </Card.Header>
         </Card.Root>
       </a>
     {/if}
 
-    <Card.Root>
-      <Card.Header>
-        <Card.Title>账号</Card.Title>
-        <Card.Description>
-          当前登录：<b class="text-foreground">{auth.user?.username}</b>{#if auth.user?.is_admin}<Badge variant="secondary" class="ml-2">管理员</Badge>{/if}
-        </Card.Description>
-        <Card.Action>
-          <Button variant="outline" size="sm" onclick={signOut}><LogOut />退出登录</Button>
-        </Card.Action>
-      </Card.Header>
-      <Card.Content>
-        <form class="grid gap-4" onsubmit={submitPassword}>
-          <div class="grid gap-3 sm:grid-cols-3">
-            <Field label="原密码"><Input required type="password" autocomplete="current-password" bind:value={pw.old} /></Field>
-            <Field label="新密码"><Input required minlength={8} type="password" autocomplete="new-password" bind:value={pw.next} /></Field>
-            <Field label="确认新密码"><Input required type="password" autocomplete="new-password" bind:value={pw.confirm} /></Field>
-          </div>
-          <div><Button type="submit" size="sm" variant="outline">修改密码</Button></div>
-        </form>
-      </Card.Content>
-    </Card.Root>
+    <Account />
   </div>
 </Page>
-
-<Sheet
-  bind:open={sheet}
-  title={form.id ? `编辑 ${KINDS[form.kind].label}` : `添加 ${KINDS[form.kind].label}`}
-  onsave={saveChannel}
-  ondelete={form.id ? () => db.channels.remove(form.id) : undefined}
->
-  <Field label="名称"><Input required bind:value={form.name} /></Field>
-  {#each KINDS[form.kind].fields as f (f.key)}
-    <Field label={f.label}><Input required={f.required} placeholder={f.placeholder} bind:value={form.cfg[f.key]} /></Field>
-  {/each}
-  {#if form.kind === 'webhook'}
-    <Field label="Headers（JSON，可选）">
-      <Textarea class="font-mono text-xs" bind:value={form.headers} placeholder={'{"Authorization": "Bearer xxx"}'} />
-    </Field>
-    <div class="grid gap-2">
-      <span class="text-sm font-medium">Body 模板（可选）</span>
-      <div class="flex flex-wrap gap-1.5">
-        {#each Object.entries(PRESETS) as [name, tpl] (name)}
-          <Button variant="secondary" size="xs" onclick={() => (form.cfg.template = tpl)}>{name}</Button>
-        {/each}
-      </div>
-      <Textarea class="font-mono text-xs" bind:value={form.cfg.template} placeholder={'留空发送 {"title","body","kind","time"}'} />
-      <span class="text-muted-foreground text-xs">可用变量：{'{{title}}'} {'{{body}}'} {'{{kind}}'}</span>
-    </div>
-  {/if}
-</Sheet>

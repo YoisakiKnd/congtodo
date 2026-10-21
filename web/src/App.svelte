@@ -1,6 +1,19 @@
 <script lang="ts">
-  import { CalendarDays, CheckSquare, Flame, Hourglass, House, LayoutGrid, LogOut, Settings as SettingsIcon, Users } from '@lucide/svelte';
+  import {
+    CalendarDays,
+    CheckSquare,
+    Ellipsis,
+    Flame,
+    Hourglass,
+    House,
+    LayoutGrid,
+    LogOut,
+    Settings as SettingsIcon,
+    Timer,
+    Users,
+  } from '@lucide/svelte';
   import { ModeWatcher } from 'mode-watcher';
+  import * as Drawer from '$lib/components/ui/drawer';
   import { Toaster } from '$lib/components/ui/sonner';
   import { auth, checkAuth, loadAll, route, signOut } from '$lib/store.svelte';
   import { cn } from '$lib/utils';
@@ -13,21 +26,25 @@
   import Settings from './views/Settings.svelte';
   import Login from './views/Login.svelte';
   import Admin from './views/Admin.svelte';
+  import Focus from './views/Focus.svelte';
 
   // 新增模块：在这里加一行 + 写一个 views/Xxx.svelte
+  // tab：移动端底栏直接显示的入口，其余收进「更多」；admin：仅管理员可见
   const routes = [
-    { path: '/', label: '今天', icon: House, view: Today },
-    { path: '/todos', label: '待办', icon: CheckSquare, view: Todos },
-    { path: '/calendar', label: '日历', icon: CalendarDays, view: Calendar },
-    { path: '/timetable', label: '课表', icon: LayoutGrid, view: Timetable },
+    { path: '/', label: '今天', icon: House, view: Today, tab: true },
+    { path: '/todos', label: '待办', icon: CheckSquare, view: Todos, tab: true },
+    { path: '/calendar', label: '日历', icon: CalendarDays, view: Calendar, tab: true },
+    { path: '/timetable', label: '课表', icon: LayoutGrid, view: Timetable, tab: true },
     { path: '/habits', label: '习惯', icon: Flame, view: Habits },
     { path: '/countdowns', label: '倒数', icon: Hourglass, view: Countdowns },
+    { path: '/focus', label: '专注', icon: Timer, view: Focus },
     { path: '/settings', label: '设置', icon: SettingsIcon, view: Settings },
-    // admin：仅管理员可见；移动端底栏放不下，从设置页进入
     { path: '/admin', label: '用户', icon: Users, view: Admin, admin: true },
   ];
   const visible = $derived(routes.filter((r) => !r.admin || auth.user?.is_admin));
   const current = $derived(visible.find((r) => r.path === route.path) ?? visible[0]);
+  const more = $derived(visible.filter((r) => !r.tab));
+  let moreOpen = $state(false);
 
   checkAuth();
   // 切回页面时刷新（多设备同步的最简实现）
@@ -86,7 +103,7 @@
 <nav
   class="bg-background/85 fixed inset-x-0 bottom-0 z-20 flex border-t pb-[env(safe-area-inset-bottom)] backdrop-blur-lg md:hidden"
 >
-  {#each routes.filter((r) => !r.admin) as r (r.path)}
+  {#each visible.filter((r) => r.tab) as r (r.path)}
     <a
       href="#{r.path}"
       aria-current={r === current ? 'page' : undefined}
@@ -99,5 +116,33 @@
       {r.label}
     </a>
   {/each}
+  <button
+    class={cn(
+      'text-muted-foreground flex h-14 flex-1 flex-col items-center justify-center gap-0.5 text-[11px]',
+      more.includes(current) && 'text-primary font-medium',
+    )}
+    onclick={() => (moreOpen = true)}
+  >
+    <Ellipsis class="size-5" />
+    {more.includes(current) ? current.label : '更多'}
+  </button>
 </nav>
+
+<Drawer.Root bind:open={moreOpen}>
+  <Drawer.Content>
+    <Drawer.Header><Drawer.Title>更多</Drawer.Title></Drawer.Header>
+    <div class="grid grid-cols-4 gap-2 px-4 pb-[calc(1.5rem+env(safe-area-inset-bottom))]">
+      {#each more as r (r.path)}
+        <a
+          href="#{r.path}"
+          onclick={() => (moreOpen = false)}
+          class={cn('hover:bg-muted flex flex-col items-center gap-1.5 rounded-xl py-3 text-xs', r === current && 'bg-muted text-primary font-medium')}
+        >
+          <r.icon class="size-6" />
+          {r.label}
+        </a>
+      {/each}
+    </div>
+  </Drawer.Content>
+</Drawer.Root>
 {/if}

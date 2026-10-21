@@ -27,7 +27,16 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return data as T;
 }
 
+/** 上传图片（原始二进制），返回文件 id */
+async function upload(blob: Blob): Promise<number> {
+  const res = await fetch('/api/files', { method: 'POST', headers: { 'content-type': blob.type }, body: blob });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(res.status, data.error ?? res.statusText);
+  return data.id;
+}
+
 export const api = {
+  upload,
   get: <T>(p: string) => request<T>('GET', p),
   post: <T>(p: string, body?: unknown) => request<T>('POST', p, body ?? {}),
   put: <T>(p: string, body: unknown) => request<T>('PUT', p, body),

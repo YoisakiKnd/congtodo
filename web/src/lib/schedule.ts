@@ -2,12 +2,12 @@
 import type { CalendarEvent, CalendarType } from '@schedule-x/calendar';
 import { PALETTE } from './store.svelte';
 import { addDays, fromTs, inWeeks, isoWeekday, occursOn, startOfDay, termWeek, toMinutes, ymd } from './time';
-import type { CalEvent, Course, Todo } from './types';
+import type { CalEvent, Course, FeedEvent, Todo } from './types';
 
 export const TZ = Temporal.Now.timeZoneId();
 
 export type Range = { start: Date; end: Date };
-export type EventRef = { kind: 'event' | 'course' | 'todo'; id: number };
+export type EventRef = { kind: 'event' | 'course' | 'todo' | 'feed'; id: number };
 
 // ---------- 颜色：每个调色板颜色对应一个 Schedule-X calendar ----------
 
@@ -82,7 +82,14 @@ export function eventInstances(events: CalEvent[], r: Range): CalendarEvent[] {
   return out;
 }
 
-export function courseInstances(courses: Course[], r: Range, termStart: string | undefined, showInactive: boolean): CalendarEvent[] {
+/** offDay：法定假日当天返回 true，课程会淡化显示（默认不提醒） */
+export function courseInstances(
+  courses: Course[],
+  r: Range,
+  termStart: string | undefined,
+  showInactive: boolean,
+  offDay: (d: Date) => boolean = () => false,
+): CalendarEvent[] {
   const out: CalendarEvent[] = [];
   for (const d of days(r)) {
     const w = termWeek(termStart, d);
@@ -99,7 +106,7 @@ export function courseInstances(courses: Course[], r: Range, termStart: string |
         start: zdt(at(d, c.start_time)),
         end: zdt(at(d, c.end_time)),
         ref: { kind: 'course', id: c.id } satisfies EventRef,
-        _options: active ? undefined : { additionalClasses: ['is-inactive'] },
+        _options: active && !offDay(d) ? undefined : { additionalClasses: ['is-inactive'] },
       });
     }
   }
@@ -117,4 +124,23 @@ export function todoInstances(todos: Todo[], r: Range): CalendarEvent[] {
       end: plainDate(fromTs(t.due_at!)),
       ref: { kind: 'todo', id: t.id } satisfies EventRef,
     }));
+}
+
+/** 订阅日历（只读）。全天事件的 end_at 存的是最后一天的 0 点 */
+export function feedInstances(events: FeedEvent[]): CalendarEvent[] {
+  return events.map((e, i) => {
+    const start = fromTs(e.start_at);
+    const end = e.end_at ? fromTs(e.end_at) : e.all_day ? start : new Date(start.getTime() + 3600_000);
+    return {
+      id: `f${e.feed_id}_${i}`,
+      title: e.title,
+      location: e.location || undefined,
+      description: `来自订阅：${e.feed}`,
+      calendarId: calendarId(e.color),
+      start: e.all_day ? plainDate(start) : zdt(start),
+      end: e.all_day ? plainDate(end) : zdt(end < start ? start : end),
+      ref: { kind: 'feed', id: e.feed_id } satisfies EventRef,
+      _options: { additionalClasses: ['is-feed'] },
+    };
+  });
 }

@@ -1,5 +1,11 @@
 <script lang="ts">
-  import { createCalendar, type CalendarApp, type CalendarConfig, type CalendarEvent } from '@schedule-x/calendar';
+  import {
+    createCalendar,
+    type CalendarApp,
+    type CalendarConfig,
+    type CalendarEvent,
+    type CustomComponentFn,
+  } from '@schedule-x/calendar';
   import { createCurrentTimePlugin } from '@schedule-x/current-time';
   import { mode } from 'mode-watcher';
   import { onMount } from 'svelte';
@@ -10,10 +16,13 @@
     config,
     build,
     onrange,
+    custom = {},
   }: {
     config: CalendarConfig;
     build: (r: Range) => CalendarEvent[];
     onrange?: (r: Range) => void;
+    /** 自定义渲染（如 monthGridDate / weekGridDate），直接操作 DOM */
+    custom?: Record<string, CustomComponentFn>;
   } = $props();
 
   let el: HTMLDivElement;
@@ -46,6 +55,7 @@
       },
       [createCurrentTimePlugin()],
     );
+    for (const [name, fn] of Object.entries(custom)) cal._setCustomComponentFn(name, fn);
     cal.render(el);
     app = cal;
     return () => cal.destroy();

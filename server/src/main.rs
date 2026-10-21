@@ -1,11 +1,17 @@
 mod admin;
 mod api;
 mod auth;
+mod data;
 mod db;
+mod holidays;
+mod ics;
+mod lists;
 mod notify;
 mod ratelimit;
 mod scheduler;
+mod tz;
 mod web;
+mod webpush;
 
 use std::{
     net::SocketAddr,
@@ -20,6 +26,7 @@ pub struct AppState {
     /// 环境变量给出的注册策略；管理员在界面上设置后以数据库为准
     pub signup_default: auth::Signup,
     pub limiter: ratelimit::Limiter,
+    pub vapid: webpush::Vapid,
 }
 
 pub type Shared = Arc<AppState>;
@@ -35,6 +42,7 @@ async fn main() {
     let addr = env("CONGTODO_ADDR", "0.0.0.0:8080");
 
     let conn = db::open(&db_path).expect("failed to open database");
+    let vapid = webpush::Vapid::load_or_create(&conn).expect("failed to init VAPID keys");
     let state: Shared = Arc::new(AppState {
         db: Mutex::new(conn),
         http: reqwest::Client::builder()
@@ -44,15 +52,23 @@ async fn main() {
             .unwrap(),
         signup_default: auth::Signup::from_env(),
         limiter: ratelimit::Limiter::default(),
+        vapid,
     });
 
     scheduler::spawn(state.clone());
+    ics::spawn(state.clone());
+    holidays::spawn(state.clone());
 
     let private = api::router()
         .merge(auth::private_router())
+        .merge(lists::router())
+        .merge(data::router())
+        .merge(ics::private_router())
+        .merge(holidays::router())
         .merge(admin::router(state.clone()))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_user));
     let api = auth::public_router()
+        .merge(ics::public_router())
         .merge(private)
         .route("/health", get(|| async { concat!("ok ", env!("CARGO_PKG_VERSION")) }))
         .with_state(state.clone());

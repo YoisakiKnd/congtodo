@@ -21,7 +21,11 @@ pub async fn serve(uri: Uri) -> Response {
             None => return (StatusCode::NOT_FOUND, "frontend not built: run `npm run build` in web/").into_response(),
         },
     };
-    let mime = mime_guess::from_path(path).first_or_octet_stream();
+    let mime = if path.ends_with(".webmanifest") {
+        "application/manifest+json".parse().unwrap()
+    } else {
+        mime_guess::from_path(path).first_or_octet_stream()
+    };
     // Vite 产物带 hash，可以长缓存
     let cache = if path.starts_with("assets/") { "public, max-age=31536000, immutable" } else { "no-cache" };
     (

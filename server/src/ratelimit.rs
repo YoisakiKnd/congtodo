@@ -77,7 +77,7 @@ pub fn client_ip(headers: &HeaderMap, peer: SocketAddr) -> IpAddr {
             .filter_map(|v| v.to_str().ok())
             .flat_map(|v| v.split(','))
             .filter_map(|s| s.trim().parse::<IpAddr>().ok())
-            .last();
+            .next_back();
         if let Some(ip) = forwarded {
             return ip;
         }

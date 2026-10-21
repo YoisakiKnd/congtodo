@@ -1,36 +1,67 @@
 //! 通知推送。新增一种渠道：在 `send` 里加一个分支，并在 db.rs 的 CHECK 约束和前端表单里登记。
+//! 实际发送由 scheduler 的推送队列（outbox）驱动，这里只负责「把一条消息发到一个渠道」。
 
-use reqwest::{Client, Method, RequestBuilder};
+use reqwest::{Client, Method, RequestBuilder, StatusCode};
 use serde_json::{Value, json};
 
-use crate::Shared;
+use crate::webpush::{self, Vapid};
 
 pub struct Msg {
     pub title: String,
     pub body: String,
-    /// 来源模块：todo / event / course / habit / countdown / digest / test
-    pub kind: &'static str,
+    /// 来源模块：todo / event / course / habit / countdown / digest / weekly / test
+    pub kind: String,
+}
+
+/// 发送失败的原因；Gone 表示浏览器订阅已失效，应停用该渠道
+pub enum SendError {
+    Gone(String),
+    Other(String),
+}
+
+impl SendError {
+    pub fn message(&self) -> &str {
+        match self {
+            SendError::Gone(m) | SendError::Other(m) => m,
+        }
+    }
+}
+
+impl From<String> for SendError {
+    fn from(e: String) -> Self {
+        SendError::Other(e)
+    }
 }
 
 fn s<'a>(cfg: &'a Value, key: &str) -> Option<&'a str> {
     cfg.get(key).and_then(Value::as_str).filter(|v| !v.is_empty())
 }
 
-pub async fn send(http: &Client, kind: &str, cfg: &Value, msg: &Msg) -> Result<(), String> {
+pub async fn send(http: &Client, vapid: &Vapid, kind: &str, cfg: &Value, msg: &Msg) -> Result<(), SendError> {
     let req = match kind {
         "ntfy" => ntfy(http, cfg, msg)?,
         "bark" => bark(http, cfg, msg)?,
         "webhook" => webhook(http, cfg, msg)?,
-        other => return Err(format!("unknown channel kind: {other}")),
+        "webpush" => webpush::request(
+            http,
+            vapid,
+            cfg,
+            &json!({ "title": msg.title, "body": msg.body, "kind": msg.kind, "url": "/" }),
+        )?,
+        other => return Err(format!("unknown channel kind: {other}").into()),
     };
     let resp = req.send().await.map_err(|e| e.to_string())?;
-    if resp.status().is_success() {
-        Ok(())
-    } else {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        Err(format!("{status}: {}", text.chars().take(200).collect::<String>()))
+    let status = resp.status();
+    if status.is_success() {
+        return Ok(());
     }
+    let text = resp.text().await.unwrap_or_default();
+    let err = format!("{status}: {}", text.chars().take(200).collect::<String>());
+    // 推送服务返回 404 / 410 说明浏览器订阅已过期或被用户取消
+    if kind == "webpush" && matches!(status, StatusCode::NOT_FOUND | StatusCode::GONE) {
+        return Err(SendError::Gone(err));
+    }
+    Err(err.into())
 }
 
 /// ntfy: { server?, topic, token?, priority? }  — https://docs.ntfy.sh/publish/#publish-as-json
@@ -87,7 +118,7 @@ fn webhook(http: &Client, cfg: &Value, msg: &Msg) -> Result<RequestBuilder, Stri
             };
             tpl.replace("{{title}}", &esc(&msg.title))
                 .replace("{{body}}", &esc(&msg.body))
-                .replace("{{kind}}", msg.kind)
+                .replace("{{kind}}", &msg.kind)
         }
         None => json!({
             "title": msg.title,
@@ -98,28 +129,4 @@ fn webhook(http: &Client, cfg: &Value, msg: &Msg) -> Result<RequestBuilder, Stri
         .to_string(),
     };
     Ok(req.body(body))
-}
-
-/// 推送到该用户所有启用的渠道；单个渠道失败只记录日志
-pub async fn broadcast(state: &Shared, user_id: i64, msg: &Msg) {
-    let channels: Vec<(String, String, String)> = {
-        let conn = state.db.lock().unwrap();
-        let Ok(mut stmt) =
-            conn.prepare_cached(
-                "SELECT c.name, c.kind, c.config FROM channels c JOIN users u ON u.id = c.user_id
-                 WHERE c.enabled = 1 AND c.user_id = ? AND u.disabled = 0",
-            )
-        else {
-            return;
-        };
-        stmt.query_map([user_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-            .map(|rows| rows.flatten().collect())
-            .unwrap_or_default()
-    };
-    for (name, kind, config) in channels {
-        let cfg: Value = serde_json::from_str(&config).unwrap_or_default();
-        if let Err(e) = send(&state.http, &kind, &cfg, msg).await {
-            eprintln!("[notify] user {user_id} channel '{name}' ({kind}) failed: {e}");
-        }
-    }
 }

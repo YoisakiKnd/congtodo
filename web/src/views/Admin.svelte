@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Ellipsis, KeyRound, Plus, ShieldCheck, ShieldOff, Trash2, UserCheck, UserX } from '@lucide/svelte';
+  import { DatabaseBackup, Ellipsis, KeyRound, Plus, ShieldCheck, ShieldOff, Trash2, UserCheck, UserX } from '@lucide/svelte';
   import { onMount } from 'svelte';
   import { toast } from 'svelte-sonner';
   import Field from '../components/Field.svelte';
@@ -122,6 +122,9 @@
 
 <Page title="用户管理" sub="仅管理员可见" class="max-w-5xl">
   {#snippet actions()}
+    <Button variant="outline" href="/api/admin/backup" download title="下载整个数据库的快照，可直接替换数据文件恢复">
+      <DatabaseBackup />备份数据库
+    </Button>
     <Button onclick={openCreate}><Plus />新建用户</Button>
   {/snippet}
 

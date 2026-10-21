@@ -1,6 +1,6 @@
 [package]
 name = "congtodo"
-version = "0.1.0-alpha.2"
+version = "0.2.0-alpha.1"
 edition = "2024"
 
 [dependencies]
@@ -17,6 +17,12 @@ argon2 = "0.6"
 sha2 = "0.11"
 getrandom = "0.4"
 hex = "0.4"
+chrono-tz = "0.10"
+iana-time-zone = "0.1"
+aes-gcm = "0.11"
+hkdf = "0.13"
+base64 = "0.23"
+p256 = { version = "0.14", features = ["ecdh", "ecdsa"] }
 
 [profile.release]
 opt-level = 3

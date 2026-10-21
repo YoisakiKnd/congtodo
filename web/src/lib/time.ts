@@ -106,3 +106,15 @@ export const REMIND_OPTIONS: { label: string; value: number | null }[] = [
   { label: '提前 3 天', value: 4320 },
   { label: '提前 1 周', value: 10080 },
 ];
+
+/** 倒数日的目标时间：每年重复的取今天或之后最近的一次（2/29 在非闰年跳过） */
+export function countdownTarget(c: { target_at: number; repeat: string }, now: Date): { ts: number; years: number } {
+  const t = fromTs(c.target_at);
+  if (c.repeat !== 'yearly') return { ts: c.target_at, years: 0 };
+  for (let y = Math.max(now.getFullYear(), t.getFullYear()); y < t.getFullYear() + 500; y++) {
+    const d = new Date(y, t.getMonth(), t.getDate(), t.getHours(), t.getMinutes());
+    if (d.getMonth() !== t.getMonth()) continue;
+    if (startOfDay(d) >= startOfDay(now)) return { ts: toTs(d), years: y - t.getFullYear() };
+  }
+  return { ts: c.target_at, years: 0 };
+}

@@ -3,9 +3,9 @@
 use axum::{
     Extension, Json, Router,
     extract::{Path, Request, State},
-    http::StatusCode,
+    http::{StatusCode, header},
     middleware::{self, Next},
-    response::Response,
+    response::{IntoResponse, Response},
     routing::{get, patch},
 };
 use rusqlite::Connection;
@@ -24,6 +24,7 @@ pub fn router(state: Shared) -> Router<Shared> {
         .route("/admin/users", get(list).post(create))
         .route("/admin/users/{id}", patch(update).delete(remove))
         .route("/admin/settings", get(get_settings).put(put_settings))
+        .route("/admin/backup", get(backup))
         .route_layer(middleware::from_fn_with_state(state, require_admin))
 }
 
@@ -87,11 +88,10 @@ async fn create(State(s): State<Shared>, Json(u): Json<NewUser>) -> ApiResult {
         "INSERT INTO users (username, password_hash, is_admin) VALUES (?, ?, ?)",
         (&username, &hash, u.is_admin),
     );
-    if let Err(rusqlite::Error::SqliteFailure(e, _)) = &inserted {
-        if e.code == rusqlite::ErrorCode::ConstraintViolation {
+    if let Err(rusqlite::Error::SqliteFailure(e, _)) = &inserted
+        && e.code == rusqlite::ErrorCode::ConstraintViolation {
             return Err(ApiErr(StatusCode::CONFLICT, "用户名已被占用".into()));
         }
-    }
     inserted?;
     user_row(&conn, conn.last_insert_rowid())
 }
@@ -184,4 +184,25 @@ async fn put_settings(State(s): State<Shared>, Json(b): Json<ServerSettings>) ->
         [mode.as_str()],
     )?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// 下载整个数据库的一致性快照（VACUUM INTO，不影响正在运行的服务）
+async fn backup(State(s): State<Shared>) -> Result<Response, ApiErr> {
+    let path = std::env::temp_dir().join(format!("congtodo-backup-{}.db", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    {
+        let conn = s.db.lock().unwrap();
+        conn.execute("VACUUM INTO ?", [path.to_string_lossy()])?;
+    }
+    let data = std::fs::read(&path).map_err(|e| ApiErr(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
+    let _ = std::fs::remove_file(&path);
+    let name = format!("congtodo-{}.db", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/vnd.sqlite3".to_string()),
+            (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{name}\"")),
+        ],
+        data?,
+    )
+        .into_response())
 }

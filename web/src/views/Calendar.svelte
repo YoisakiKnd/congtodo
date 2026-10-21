@@ -18,15 +18,45 @@
   import { Input } from '$lib/components/ui/input';
   import { Switch } from '$lib/components/ui/switch';
   import { Textarea } from '$lib/components/ui/textarea';
-  import { courseInstances, eventInstances, todoInstances, toDate, type EventRef, type Range } from '$lib/schedule';
-  import { db, PALETTE, settings } from '$lib/store.svelte';
+  import { api } from '$lib/api';
+  import { createCellRenderer } from '$lib/calendar-cells';
+  import {
+    courseInstances,
+    eventInstances,
+    feedInstances,
+    todoInstances,
+    toDate,
+    type EventRef,
+    type Range,
+  } from '$lib/schedule';
+  import ChannelPick from '../components/ChannelPick.svelte';
+  import { db, ensureHolidays, holidays, PALETTE, settings } from '$lib/store.svelte';
   import { fromInput, fromTs, hhmm, parseYmd, REMIND_OPTIONS, toInput, toTs, ymd } from '$lib/time';
-  import type { CalEvent, Repeat } from '$lib/types';
+  import type { CalEvent, ChannelIds, FeedEvent, Repeat } from '$lib/types';
+  import { toast } from 'svelte-sonner';
 
   let showCourses = $state(false);
   let showTodos = $state(true);
+  let showFeeds = $state(true);
+  let feedEvents = $state<FeedEvent[]>([]);
+
+  // 农历 / 节假日格子：节假日数据加载后重绘
+  const cells = createCellRenderer();
+  $effect(() => {
+    void holidays.size;
+    cells.repaint();
+  });
+
+  async function onrange(r: Range) {
+    for (let y = r.start.getFullYear(); y <= r.end.getFullYear(); y++) ensureHolidays(y);
+    if (!db.feeds.items.some((f) => f.enabled)) return (feedEvents = []);
+    feedEvents = await api
+      .get<FeedEvent[]>(`/feeds/events?from=${toTs(r.start)}&to=${toTs(r.end)}`)
+      .catch(() => []);
+  }
 
   const build = (r: Range) => [
+    ...(showFeeds ? feedInstances(feedEvents) : []),
     ...eventInstances(db.events.items, r),
     ...(showTodos ? todoInstances(db.todos.items, r) : []),
     ...(showCourses ? courseInstances(db.courses.items, r, settings.term_start, false) : []),
@@ -43,6 +73,8 @@
         if (ref.kind === 'event') {
           const e = db.events.items.find((x) => x.id === ref.id);
           if (e) edit(e);
+        } else if (ref.kind === 'feed') {
+          toast.info(ev.title ?? '', { description: `${ev.description ?? ''}（订阅日历只读）` });
         } else location.hash = ref.kind === 'todo' ? '#/todos' : '#/timetable';
       },
       onDoubleClickDate: (d) => create(toDate(d), true),
@@ -71,6 +103,7 @@
     remind_before: 15 as number | null,
     color: PALETTE[0] as string | null,
     note: '',
+    channels: null as ChannelIds,
   });
 
   function create(at: Date, dateOnly: boolean) {
@@ -86,6 +119,7 @@
       remind_before: 15,
       color: PALETTE[0],
       note: '',
+      channels: null,
     };
     sheet = true;
   }
@@ -103,6 +137,7 @@
       remind_before: e.remind_before,
       color: e.color,
       note: e.note ?? '',
+      channels: e.channels,
     };
     sheet = true;
   }
@@ -126,6 +161,7 @@
       remind_before: form.remind_before,
       color: form.color,
       note: form.note || null,
+      channels: form.channels,
     });
   }
 </script>
@@ -134,11 +170,14 @@
   {#snippet actions()}
     <label class="flex items-center gap-2 text-sm"><Switch bind:checked={showTodos} />待办</label>
     <label class="flex items-center gap-2 text-sm"><Switch bind:checked={showCourses} />课程</label>
+    {#if db.feeds.items.length}
+      <label class="flex items-center gap-2 text-sm"><Switch bind:checked={showFeeds} />订阅</label>
+    {/if}
     <Button onclick={() => create(new Date(), true)}><Plus />日程</Button>
   {/snippet}
 
   <Card.Root class="p-0">
-    <ScheduleX {config} {build} />
+    <ScheduleX {config} {build} {onrange} custom={cells.custom} />
   </Card.Root>
   <p class="text-muted-foreground mt-3 text-xs">双击日期或时间格可快速新建日程</p>
 </Page>
@@ -162,5 +201,6 @@
     <Field label="提醒"><Choice bind:value={form.remind_before} options={REMIND_OPTIONS} /></Field>
   </div>
   <div class="grid gap-2"><span class="text-sm font-medium">颜色</span><ColorPick bind:value={form.color} /></div>
+  <ChannelPick bind:value={form.channels} />
   <Field label="备注"><Textarea bind:value={form.note} /></Field>
 </Sheet>

@@ -1,12 +1,15 @@
 <script lang="ts">
-  import { ArrowRight, CalendarDays, CheckSquare, Flame, LayoutGrid } from '@lucide/svelte';
+  import { ArrowRight, CalendarDays, CheckSquare, Flame, LayoutGrid, Timer } from '@lucide/svelte';
   import Page from '../components/Page.svelte';
   import { Badge } from '$lib/components/ui/badge';
   import * as Card from '$lib/components/ui/card';
   import { Checkbox } from '$lib/components/ui/checkbox';
-  import { clock, db, habitLogs, settings, toggleHabit } from '$lib/store.svelte';
+  import { Button } from '$lib/components/ui/button';
+  import { lunar } from '$lib/lunar';
+  import { clock, db, habitCount, habitDone, holidays, settings, toggleHabit } from '$lib/store.svelte';
   import {
     addDays,
+    countdownTarget,
     dayDiff,
     fmtDate,
     fmtRelative,
@@ -42,13 +45,32 @@
   const events = $derived(db.events.items.filter((e) => occursOn(e, today)));
   const tomorrow = $derived(toTs(addDays(today, 1)));
   const todos = $derived(db.todos.items.filter((t) => !t.done && t.due_at != null && t.due_at < tomorrow));
-  const habits = $derived(db.habits.items.filter((h) => !h.archived));
+  // 只显示今天需要打卡的习惯
+  const habits = $derived(
+    db.habits.items.filter((h) => !h.archived && (!h.days || h.days.split(',').map(Number).includes(isoWeekday(today)))),
+  );
   const countdowns = $derived(
     db.countdowns.items
-      .filter((c) => c.target_at * 1000 > clock.minute)
-      .toSorted((a, b) => b.pinned - a.pinned || a.target_at - b.target_at)
+      .map((c) => ({ ...c, next: countdownTarget(c, now) }))
+      .filter((c) => dayDiff(now, fromTs(c.next.ts)) >= 0)
+      .toSorted((a, b) => b.pinned - a.pinned || a.next.ts - b.next.ts)
       .slice(0, 3),
   );
+  const focusToday = $derived(
+    db.focus.items.filter((f) => f.started_at >= toTs(today)).reduce((sum, f) => sum + f.minutes, 0),
+  );
+  const subtitle = $derived.by(() => {
+    const l = lunar(today);
+    const h = holidays.get(todayStr);
+    return [
+      fmtDate(now),
+      `农历${l.month}${l.dayName}`,
+      h ? (h.off ? `${h.name}假期` : `${h.name}调休上班`) : '',
+      week ? `第 ${week} 周` : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+  });
 </script>
 
 {#snippet head(Icon: typeof Flame, title: string, href: string, link: string)}
@@ -64,7 +86,12 @@
   <p class="text-muted-foreground py-6 text-center text-sm">{text}</p>
 {/snippet}
 
-<Page title={greeting} sub="{fmtDate(now)}{week ? ` · 第 ${week} 周` : ''}">
+<Page title={greeting} sub={subtitle}>
+  {#snippet actions()}
+    <Button variant="outline" href="#/focus">
+      <Timer />{focusToday ? `今日专注 ${focusToday} 分钟` : '开始专注'}
+    </Button>
+  {/snippet}
   <div class="grid gap-4 md:grid-cols-2">
     {#if countdowns.length}
       <div class="grid grid-cols-3 gap-3 md:col-span-2">
@@ -76,9 +103,11 @@
           >
             <p class="text-muted-foreground truncate text-xs font-medium">{c.title}</p>
             <p class="num text-3xl font-bold tracking-tight md:text-4xl" style="color: var(--c)">
-              {dayDiff(now, fromTs(c.target_at))}<span class="ml-1 text-sm font-semibold">天</span>
+              {dayDiff(now, fromTs(c.next.ts))}<span class="ml-1 text-sm font-semibold">天</span>
             </p>
-            <p class="text-muted-foreground truncate text-xs">{fmtRelative(c.target_at, now, false)}</p>
+            <p class="text-muted-foreground truncate text-xs">
+              {fmtRelative(c.next.ts, now, false)}{c.next.years ? ` · ${c.next.years} 周年` : ''}
+            </p>
           </a>
         {/each}
       </div>
@@ -146,16 +175,17 @@
       {@render head(Flame, '习惯打卡', '#/habits', '详情')}
       <Card.Content class="flex-row flex-wrap gap-2">
         {#each habits as h (h.id)}
-          {@const on = habitLogs.has(`${h.id}:${todayStr}`)}
+          {@const on = habitDone(h, todayStr)}
+          {@const n = habitCount(h.id, todayStr)}
           <button
             class={cn(
               'flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm transition-all active:scale-95',
               on ? 'text-white' : 'bg-muted hover:bg-accent',
             )}
             style={on ? `background: ${h.color}` : ''}
-            onclick={() => toggleHabit(h.id, todayStr)}
+            onclick={() => toggleHabit(h, todayStr)}
           >
-            <span>{h.icon || '✨'}</span>{h.name}
+            <span>{h.icon || "✨"}</span>{h.name}{#if (h.goal || 1) > 1}<span class="num text-xs opacity-80">{n}/{h.goal}</span>{/if}
           </button>
         {:else}
           <div class="w-full">{@render empty('还没有习惯，去添加一个吧')}</div>

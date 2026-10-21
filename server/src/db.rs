@@ -119,10 +119,151 @@ r#"
 ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE users ADD COLUMN last_login_at INTEGER;
 CREATE TABLE server_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
+"#,
+// v4：待办清单/子任务/重复、共享清单、习惯计数、倒数日重复与图片、节次、
+//     专注记录、推送队列、按条目选择渠道、ICS 订阅、节假日
+r#"
+CREATE TABLE todo_lists (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL,          -- 创建者
+    name TEXT NOT NULL,
+    color TEXT,
+    sort INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+CREATE INDEX todo_lists_user ON todo_lists(user_id);
+CREATE TABLE list_members (            -- 共享清单的成员（不含创建者）
+    list_id INTEGER NOT NULL REFERENCES todo_lists(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    PRIMARY KEY (list_id, user_id)
+) WITHOUT ROWID;
+CREATE INDEX list_members_user ON list_members(user_id);
+
+ALTER TABLE todos ADD COLUMN list_id INTEGER REFERENCES todo_lists(id) ON DELETE SET NULL;
+ALTER TABLE todos ADD COLUMN parent_id INTEGER REFERENCES todos(id) ON DELETE CASCADE;
+ALTER TABLE todos ADD COLUMN repeat TEXT NOT NULL DEFAULT 'none'; -- none|daily|weekdays|weekly|monthly|yearly
+CREATE INDEX todos_list ON todos(list_id);
+CREATE INDEX todos_parent ON todos(parent_id);
+
+-- 按条目选择推送渠道：JSON 数组（渠道 id），NULL = 按渠道的类型设置
+ALTER TABLE todos ADD COLUMN channels TEXT;
+ALTER TABLE events ADD COLUMN channels TEXT;
+ALTER TABLE courses ADD COLUMN channels TEXT;
+ALTER TABLE habits ADD COLUMN channels TEXT;
+ALTER TABLE countdowns ADD COLUMN channels TEXT;
+
+-- 渠道表重建：kind 增加 webpush，新增 kinds（接收哪些类型的提醒，NULL = 全部）
+CREATE TABLE channels_v4 (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('webhook', 'ntfy', 'bark', 'webpush')),
+    config TEXT NOT NULL DEFAULT '{}',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    user_id INTEGER NOT NULL DEFAULT 0,
+    kinds TEXT
+);
+INSERT INTO channels_v4 (id, name, kind, config, enabled, user_id)
+    SELECT id, name, kind, config, enabled, user_id FROM channels;
+DROP TABLE channels;
+ALTER TABLE channels_v4 RENAME TO channels;
+CREATE INDEX channels_user ON channels(user_id);
+
+ALTER TABLE habits ADD COLUMN days TEXT;              -- "1,2,3,4,5"，NULL = 每天
+ALTER TABLE habits ADD COLUMN goal INTEGER NOT NULL DEFAULT 1; -- 每天需完成的次数
+ALTER TABLE habits ADD COLUMN unit TEXT;              -- 计数单位，如「杯」
+ALTER TABLE habit_logs ADD COLUMN count INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE habit_logs ADD COLUMN note TEXT;
+
+ALTER TABLE countdowns ADD COLUMN repeat TEXT NOT NULL DEFAULT 'none'; -- none|yearly
+ALTER TABLE countdowns ADD COLUMN image_id INTEGER;
+
+ALTER TABLE courses ADD COLUMN period_from INTEGER;   -- 按节次录入时的起止节
+ALTER TABLE courses ADD COLUMN period_to INTEGER;
+
+CREATE TABLE files (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    mime TEXT NOT NULL,
+    data BLOB NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+CREATE INDEX files_user ON files(user_id);
+
+CREATE TABLE focus_sessions (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    todo_id INTEGER REFERENCES todos(id) ON DELETE SET NULL,
+    started_at INTEGER NOT NULL,
+    minutes INTEGER NOT NULL,
+    note TEXT
+);
+CREATE INDEX focus_user ON focus_sessions(user_id, started_at);
+
+-- 推送队列：每条消息每个渠道一行；免打扰延后、失败重试、推送记录都基于它
+CREATE TABLE outbox (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    channel_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending', -- pending | sent | failed
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_at INTEGER NOT NULL,
+    error TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    sent_at INTEGER
+);
+CREATE INDEX outbox_pending ON outbox(next_at) WHERE status = 'pending';
+CREATE INDEX outbox_user ON outbox(user_id, created_at);
+
+-- 订阅的外部日历（ICS）
+CREATE TABLE feeds (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    url TEXT NOT NULL,
+    color TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    last_sync INTEGER,
+    last_error TEXT
+);
+CREATE INDEX feeds_user ON feeds(user_id);
+CREATE TABLE feed_events (
+    feed_id INTEGER NOT NULL REFERENCES feeds(id) ON DELETE CASCADE,
+    uid TEXT NOT NULL,
+    title TEXT NOT NULL,
+    start_at INTEGER NOT NULL,
+    end_at INTEGER,
+    all_day INTEGER NOT NULL DEFAULT 0,
+    repeat TEXT NOT NULL DEFAULT 'none',
+    location TEXT,
+    PRIMARY KEY (feed_id, uid, start_at)
+);
+
+-- 法定节假日 / 调休缓存（来源：NateScarlet/holiday-cn）
+CREATE TABLE holidays (
+    date TEXT PRIMARY KEY,              -- "2026-10-01"
+    name TEXT NOT NULL,
+    off INTEGER NOT NULL                -- 1 放假，0 调休上班
+) WITHOUT ROWID;
 "#];
 
-/// 带 user_id 的业务表，第一个用户注册时认领其中 user_id = 0 的旧数据
-pub const USER_TABLES: &[&str] = &["countdowns", "events", "courses", "todos", "habits", "channels", "user_settings"];
+/// 带 user_id 的业务表：第一个用户注册时认领其中 user_id = 0 的旧数据；删除用户时一并清理
+pub const USER_TABLES: &[&str] = &[
+    "countdowns",
+    "events",
+    "courses",
+    "todos",
+    "todo_lists",
+    "habits",
+    "channels",
+    "user_settings",
+    "files",
+    "focus_sessions",
+    "outbox",
+    "feeds",
+];
 
 pub fn open(path: &str) -> rusqlite::Result<Connection> {
     let mut conn = Connection::open(path)?;

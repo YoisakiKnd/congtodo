@@ -260,11 +260,10 @@ async fn register(
         "INSERT INTO users (username, password_hash, is_admin) VALUES (?, ?, ?)",
         (&username, &hash, first as i64),
     );
-    if let Err(rusqlite::Error::SqliteFailure(e, _)) = &inserted {
-        if e.code == rusqlite::ErrorCode::ConstraintViolation {
+    if let Err(rusqlite::Error::SqliteFailure(e, _)) = &inserted
+        && e.code == rusqlite::ErrorCode::ConstraintViolation {
             return Err(ApiErr(StatusCode::CONFLICT, "用户名已被占用".into()));
         }
-    }
     inserted?;
     let user_id = tx.last_insert_rowid();
     if first {
