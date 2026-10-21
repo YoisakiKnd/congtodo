@@ -20,7 +20,7 @@ docker compose up -d
 ```
 
 打开 `http://服务器:8080`，**第一个注册的账号成为管理员**。默认策略下之后就关闭注册，
-需要给家人朋友开账号时把 `CONGTODO_SIGNUP` 临时改成 `open`。
+管理员可以在「用户管理」页面直接创建账号，或临时开放注册。
 
 ### 单文件
 
@@ -55,7 +55,8 @@ location / {
 | --- | --- | --- |
 | `CONGTODO_ADDR` | `0.0.0.0:8080` | 监听地址 |
 | `CONGTODO_DB` | `congtodo.db`（镜像内为 `/data/congtodo.db`） | SQLite 文件路径 |
-| `CONGTODO_SIGNUP` | `first` | `first` 只允许创建第一个账号；`open` 开放注册；`closed` 禁止注册 |
+| `CONGTODO_SIGNUP` | `first` | 注册策略默认值：`first` 只允许创建第一个账号；`open` 开放注册；`closed` 禁止注册。管理员在界面上修改后以界面为准 |
+| `CONGTODO_TRUST_PROXY` | 空 | 设为 `1` 时始终信任 `X-Forwarded-For`。默认只在请求来自本机 / 内网（即反向代理）时信任，用于限流识别客户端 IP |
 | `CONGTODO_SECURE_COOKIE` | 空 | 设为 `1` 时强制 Cookie 加 `Secure`（代理不传 `X-Forwarded-Proto` 时使用） |
 | `TZ` | 系统时区（镜像内 `Asia/Shanghai`） | 课表、习惯提醒等"几点几分"按此时区解释 |
 
@@ -69,10 +70,17 @@ location / {
 - **升级**：拉取新镜像 / 替换二进制后重启，数据库迁移会自动执行
 - **从无账号版本升级**：旧数据会自动归入第一个注册的账号
 
-### 安全提示
+### 用户管理
 
+管理员在侧栏「用户」（移动端在「设置 → 用户管理」）中可以：创建账号、重置密码、设置 / 取消管理员、停用 / 启用、删除用户（连同其全部数据），以及修改注册策略。
+停用或重置密码会让该用户所有设备立即下线，停用期间不再推送提醒。管理员不能降级、停用或删除自己，因此始终至少保留一个管理员。
+
+### 安全
+
+- 密码使用 argon2id 哈希；会话令牌只以 SHA-256 形式入库；Cookie 为 `HttpOnly` + `SameSite=Lax`
+- 登录限流（内存计数，重启清零）：同一 IP 15 分钟内失败 20 次、同一用户名 15 分钟内失败 10 次后暂时拒绝；同一 IP 每小时最多注册 5 次；改密码时原密码错 5 次后暂停 15 分钟
+- 按用户名限流意味着别人可以故意输错让某个账号暂时（15 分钟）无法登录，这是防暴力破解的常见取舍
 - Webhook 渠道会让服务器向用户填写的地址发请求。开放注册（`open`）时，任何注册用户都能借此访问服务器所在内网，请只对信任的人开放
-- 登录接口暂未做频率限制，Alpha 阶段建议配合反向代理的限流使用
 
 ## 开发
 
@@ -112,6 +120,8 @@ docker build -t congtodo .
 server/src/
   main.rs       启动、路由组装、优雅退出
   auth.rs       注册 / 登录 / 会话 / 改密码，require_user 中间件
+  admin.rs      管理员接口（用户管理、注册策略），require_admin 中间件
+  ratelimit.rs  滑动窗口限流、客户端 IP 识别
   db.rs         表结构与迁移（MIGRATIONS 只追加）
   api.rs        RESOURCES 表驱动的通用 CRUD
   scheduler.rs  提醒调度（todo/倒计时/日程含重复/课程/习惯/每日概览）
@@ -143,6 +153,9 @@ web/src/
 | POST | `/api/auth/logout` | 注销当前会话 |
 | GET | `/api/auth/me` | 当前用户 |
 | POST | `/api/auth/password` | `{old, new}`，其他设备的会话会失效 |
+| GET / POST | `/api/admin/users` | 管理员：用户列表 / 创建用户 `{username, password, is_admin}` |
+| PATCH / DELETE | `/api/admin/users/{id}` | 管理员：`{is_admin?, disabled?, password?}` / 删除用户及其数据 |
+| GET / PUT | `/api/admin/settings` | 管理员：`{signup}` 注册策略 |
 | GET / POST | `/api/{res}` | 列表 / 新建，`res` ∈ countdowns events courses todos habits channels |
 | PATCH / DELETE | `/api/{res}/{id}` | 局部更新 / 删除 |
 | GET / PUT | `/api/settings` | 键值设置：`term_start`、`digest_time` |
@@ -173,4 +186,4 @@ Body 模板中的 `{{title}}` `{{body}}` `{{kind}}` 会以 JSON 字符串转义�
 
 - **加一个数据模块**：`db.rs` 追加一条迁移 → `api.rs` 的 `RESOURCES` 加一行 → `types.ts` 加接口 → `store.svelte.ts` 的 `db` 加一个 `Collection` → 写 `views/Xxx.svelte` 并在 `App.svelte` 的路由表登记
 - **加一种推送渠道**：在 `notify.rs` 的 `send` 中加分支，同时修改 `channels.kind` 的 CHECK 约束（需新迁移），并在 `Settings.svelte` 的 `KINDS` 里登记表单字段
-- **路线图建议**：管理员用户管理界面、登录限流、按条目选择推送渠道、导入教务系统课表 / ICS、Web Push（VAPID）、PWA 离线缓存、数据导出
+- **路线图**：见 issue 与发布说明

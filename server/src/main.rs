@@ -1,18 +1,25 @@
+mod admin;
 mod api;
 mod auth;
 mod db;
 mod notify;
+mod ratelimit;
 mod scheduler;
 mod web;
 
-use std::sync::{Arc, Mutex};
+use std::{
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+};
 
 use axum::{Router, middleware, routing::get};
 
 pub struct AppState {
     pub db: Mutex<rusqlite::Connection>,
     pub http: reqwest::Client,
-    pub signup: auth::Signup,
+    /// 环境变量给出的注册策略；管理员在界面上设置后以数据库为准
+    pub signup_default: auth::Signup,
+    pub limiter: ratelimit::Limiter,
 }
 
 pub type Shared = Arc<AppState>;
@@ -35,13 +42,15 @@ async fn main() {
             .user_agent(concat!("congtodo/", env!("CARGO_PKG_VERSION")))
             .build()
             .unwrap(),
-        signup: auth::Signup::from_env(),
+        signup_default: auth::Signup::from_env(),
+        limiter: ratelimit::Limiter::default(),
     });
 
     scheduler::spawn(state.clone());
 
     let private = api::router()
         .merge(auth::private_router())
+        .merge(admin::router(state.clone()))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_user));
     let api = auth::public_router()
         .merge(private)
@@ -52,7 +61,11 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     println!("congtodo {} listening on http://{addr}  (db: {db_path})", env!("CARGO_PKG_VERSION"));
-    axum::serve(listener, app).with_graceful_shutdown(shutdown()).await.unwrap();
+    // 带上对端地址，限流需要客户端 IP
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+        .with_graceful_shutdown(shutdown())
+        .await
+        .unwrap();
 }
 
 /// Ctrl-C 或 SIGTERM（docker stop）时优雅退出

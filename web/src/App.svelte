@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { CalendarDays, CheckSquare, Flame, Hourglass, House, LayoutGrid, LogOut, Settings as SettingsIcon } from '@lucide/svelte';
+  import { CalendarDays, CheckSquare, Flame, Hourglass, House, LayoutGrid, LogOut, Settings as SettingsIcon, Users } from '@lucide/svelte';
   import { ModeWatcher } from 'mode-watcher';
   import { Toaster } from '$lib/components/ui/sonner';
   import { auth, checkAuth, loadAll, route, signOut } from '$lib/store.svelte';
@@ -12,6 +12,7 @@
   import Habits from './views/Habits.svelte';
   import Settings from './views/Settings.svelte';
   import Login from './views/Login.svelte';
+  import Admin from './views/Admin.svelte';
 
   // 新增模块：在这里加一行 + 写一个 views/Xxx.svelte
   const routes = [
@@ -22,8 +23,11 @@
     { path: '/habits', label: '习惯', icon: Flame, view: Habits },
     { path: '/countdowns', label: '倒数', icon: Hourglass, view: Countdowns },
     { path: '/settings', label: '设置', icon: SettingsIcon, view: Settings },
+    // admin：仅管理员可见；移动端底栏放不下，从设置页进入
+    { path: '/admin', label: '用户', icon: Users, view: Admin, admin: true },
   ];
-  const current = $derived(routes.find((r) => r.path === route.path) ?? routes[0]);
+  const visible = $derived(routes.filter((r) => !r.admin || auth.user?.is_admin));
+  const current = $derived(visible.find((r) => r.path === route.path) ?? visible[0]);
 
   checkAuth();
   // 切回页面时刷新（多设备同步的最简实现）
@@ -47,7 +51,7 @@
     </span>
     Congtodo
   </a>
-  {#each routes as r (r.path)}
+  {#each visible as r (r.path)}
     <a
       href="#{r.path}"
       aria-current={r === current ? 'page' : undefined}
@@ -82,7 +86,7 @@
 <nav
   class="bg-background/85 fixed inset-x-0 bottom-0 z-20 flex border-t pb-[env(safe-area-inset-bottom)] backdrop-blur-lg md:hidden"
 >
-  {#each routes as r (r.path)}
+  {#each routes.filter((r) => !r.admin) as r (r.path)}
     <a
       href="#{r.path}"
       aria-current={r === current ? 'page' : undefined}

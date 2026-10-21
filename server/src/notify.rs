@@ -105,7 +105,10 @@ pub async fn broadcast(state: &Shared, user_id: i64, msg: &Msg) {
     let channels: Vec<(String, String, String)> = {
         let conn = state.db.lock().unwrap();
         let Ok(mut stmt) =
-            conn.prepare_cached("SELECT name, kind, config FROM channels WHERE enabled = 1 AND user_id = ?")
+            conn.prepare_cached(
+                "SELECT c.name, c.kind, c.config FROM channels c JOIN users u ON u.id = c.user_id
+                 WHERE c.enabled = 1 AND c.user_id = ? AND u.disabled = 0",
+            )
         else {
             return;
         };

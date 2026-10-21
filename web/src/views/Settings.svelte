@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Bell, LogOut, Monitor, Moon, Plus, Send, Sun } from '@lucide/svelte';
+  import { Bell, ChevronRight, LogOut, Monitor, Moon, Plus, Send, Sun, Users } from '@lucide/svelte';
   import { setMode, userPrefersMode } from 'mode-watcher';
   import { toast } from 'svelte-sonner';
   import Field from '../components/Field.svelte';
@@ -201,6 +201,18 @@
         </div>
       </Card.Content>
     </Card.Root>
+
+    {#if auth.user?.is_admin}
+      <a href="#/admin" class="block">
+        <Card.Root class="hover:ring-primary/40 transition-shadow">
+          <Card.Header>
+            <Card.Title class="flex items-center gap-2"><Users class="size-4" />用户管理</Card.Title>
+            <Card.Description>创建账号、重置密码、停用或删除用户、修改注册策略</Card.Description>
+            <Card.Action><ChevronRight class="text-muted-foreground size-4" /></Card.Action>
+          </Card.Header>
+        </Card.Root>
+      </a>
+    {/if}
 
     <Card.Root>
       <Card.Header>

@@ -113,6 +113,12 @@ CREATE TABLE user_settings (
 ) WITHOUT ROWID;
 INSERT INTO user_settings (user_id, key, value) SELECT 0, key, value FROM settings;
 DROP TABLE settings;
+"#,
+// v3：停用账号 + 全站设置（如注册策略，管理员可在界面上修改）
+r#"
+ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN last_login_at INTEGER;
+CREATE TABLE server_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
 "#];
 
 /// 带 user_id 的业务表，第一个用户注册时认领其中 user_id = 0 的旧数据
@@ -159,6 +165,11 @@ pub fn row_to_json(row: &rusqlite::Row, json_cols: &[&str]) -> rusqlite::Result<
         obj.insert(name.to_string(), v);
     }
     Ok(Value::Object(obj))
+}
+
+pub fn get_server_setting(conn: &Connection, key: &str) -> Option<String> {
+    conn.query_row("SELECT value FROM server_settings WHERE key = ?", [key], |r| r.get(0))
+        .ok()
 }
 
 pub fn get_setting(conn: &Connection, user_id: i64, key: &str) -> Option<String> {

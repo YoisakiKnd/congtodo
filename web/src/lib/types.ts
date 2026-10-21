@@ -59,6 +59,20 @@ export interface Habit {
   created_at: number;
 }
 
+/** 管理员视角的用户信息（/api/admin/users） */
+export interface AdminUser {
+  id: number;
+  username: string;
+  is_admin: number;
+  disabled: number;
+  created_at: number;
+  last_login_at: number | null;
+  sessions: number; // 有效会话数
+  items: number; // 待办 + 日程 + 课程 + 习惯 + 倒数日 条数
+}
+
+export type SignupMode = 'first' | 'open' | 'closed';
+
 export type ChannelKind = 'webhook' | 'ntfy' | 'bark';
 
 export interface Channel {

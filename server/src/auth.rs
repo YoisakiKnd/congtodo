@@ -1,17 +1,21 @@
 //! 账号与会话：用户名 + 密码（argon2id），HttpOnly Cookie 会话。
 //!
-//! 注册策略由 CONGTODO_SIGNUP 控制：
+//! 注册策略（管理员可在界面修改，未设置时取环境变量 CONGTODO_SIGNUP）：
 //! - `first`（默认）：只有还没有任何用户时允许注册，第一个用户成为管理员
 //! - `open`：任何人都可以注册
 //! - `closed`：禁止注册（没有任何用户时仍允许创建第一个账号）
+//!
+//! 登录 / 注册 / 改密码都经过 ratelimit 限流。
 
 use argon2::{
     Argon2,
     password_hash::{PasswordHasher, PasswordVerifier, phc::PasswordHash},
 };
+use std::net::SocketAddr;
+
 use axum::{
     Extension, Json, Router,
-    extract::{Request, State},
+    extract::{ConnectInfo, Request, State},
     http::{HeaderMap, StatusCode, header},
     middleware::Next,
     response::{IntoResponse, Response},
@@ -25,7 +29,8 @@ use sha2::{Digest, Sha256};
 use crate::{
     Shared,
     api::{ApiErr, ApiResult},
-    db::USER_TABLES,
+    db::{USER_TABLES, get_server_setting},
+    ratelimit::{self, LOGIN_IP, LOGIN_USER, PASSWORD_USER, REGISTER_IP, Rule},
 };
 
 const COOKIE: &str = "congtodo_session";
@@ -43,12 +48,30 @@ pub enum Signup {
 }
 
 impl Signup {
-    pub fn from_env() -> Self {
-        match std::env::var("CONGTODO_SIGNUP").as_deref() {
-            Ok("open") => Signup::Open,
-            Ok("closed") => Signup::Closed,
-            _ => Signup::First,
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "first" => Some(Signup::First),
+            "open" => Some(Signup::Open),
+            "closed" => Some(Signup::Closed),
+            _ => None,
         }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Signup::First => "first",
+            Signup::Open => "open",
+            Signup::Closed => "closed",
+        }
+    }
+
+    pub fn from_env() -> Self {
+        std::env::var("CONGTODO_SIGNUP").ok().as_deref().and_then(Self::parse).unwrap_or(Signup::First)
+    }
+
+    /// 当前生效的策略：数据库里管理员设置的优先，否则用环境变量
+    pub fn current(conn: &Connection, default: Signup) -> Self {
+        get_server_setting(conn, "signup").as_deref().and_then(Self::parse).unwrap_or(default)
     }
 }
 
@@ -126,6 +149,7 @@ fn create_session(conn: &Connection, user_id: i64) -> Result<String, ApiErr> {
         "INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)",
         (hash_token(&token), user_id, now() + SESSION_DAYS * 86400),
     )?;
+    conn.execute("UPDATE users SET last_login_at = ? WHERE id = ?", (now(), user_id))?;
     Ok(token)
 }
 
@@ -133,19 +157,44 @@ fn user_count(conn: &Connection) -> rusqlite::Result<i64> {
     conn.query_row("SELECT count(*) FROM users", [], |r| r.get(0))
 }
 
-fn signup_allowed(conn: &Connection, mode: Signup) -> rusqlite::Result<bool> {
-    Ok(mode == Signup::Open || user_count(conn)? == 0)
+fn signup_allowed(conn: &Connection, default: Signup) -> rusqlite::Result<bool> {
+    Ok(Signup::current(conn, default) == Signup::Open || user_count(conn)? == 0)
 }
 
-fn validate(username: &str, password: &str) -> Result<(), ApiErr> {
+/// 被限流时返回 429
+fn limited(s: &Shared, key: &str, rule: Rule) -> Result<(), ApiErr> {
+    match s.limiter.check(key, rule, now()) {
+        Some(wait) => Err(ApiErr(
+            StatusCode::TOO_MANY_REQUESTS,
+            format!("尝试次数过多，请 {}后再试", ratelimit::fmt_wait(wait)),
+        )),
+        None => Ok(()),
+    }
+}
+
+pub(crate) fn validate_username(username: &str) -> Result<(), ApiErr> {
     let len = username.chars().count();
     if !(3..=32).contains(&len) || !username.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
         return Err(bad("用户名需为 3-32 位字母、数字、下划线或横线"));
     }
+    Ok(())
+}
+
+pub(crate) fn validate_password(password: &str) -> Result<(), ApiErr> {
     if password.chars().count() < 8 {
         return Err(bad("密码至少 8 位"));
     }
     Ok(())
+}
+
+fn validate(username: &str, password: &str) -> Result<(), ApiErr> {
+    validate_username(username)?;
+    validate_password(password)
+}
+
+/// argon2 哈希（供管理员创建用户 / 重置密码使用）
+pub(crate) async fn hash(password: String) -> Result<String, ApiErr> {
+    hash_password(password).await
 }
 
 // ---------- 中间件 ----------
@@ -155,7 +204,8 @@ pub async fn require_user(State(s): State<Shared>, mut req: Request, next: Next)
     let user_id: Option<i64> = {
         let conn = s.db.lock().unwrap();
         conn.query_row(
-            "SELECT user_id FROM sessions WHERE token_hash = ? AND expires_at > ?",
+            "SELECT s.user_id FROM sessions s JOIN users u ON u.id = s.user_id
+             WHERE s.token_hash = ? AND s.expires_at > ? AND u.disabled = 0",
             (hash_token(&token), now()),
             |r| r.get(0),
         )
@@ -176,15 +226,24 @@ struct Credentials {
 
 async fn config(State(s): State<Shared>) -> ApiResult {
     let conn = s.db.lock().unwrap();
-    Ok(Json(json!({ "signup": signup_allowed(&conn, s.signup)?, "first": user_count(&conn)? == 0 })))
+    Ok(Json(json!({ "signup": signup_allowed(&conn, s.signup_default)?, "first": user_count(&conn)? == 0 })))
 }
 
-async fn register(State(s): State<Shared>, headers: HeaderMap, Json(c): Json<Credentials>) -> Result<Response, ApiErr> {
+async fn register(
+    State(s): State<Shared>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(c): Json<Credentials>,
+) -> Result<Response, ApiErr> {
+    let ip_key = format!("register:{}", ratelimit::client_ip(&headers, peer));
+    limited(&s, &ip_key, REGISTER_IP)?;
+    s.limiter.hit(&ip_key, now());
+
     let username = c.username.trim().to_string();
     validate(&username, &c.password)?;
     {
         let conn = s.db.lock().unwrap();
-        if !signup_allowed(&conn, s.signup)? {
+        if !signup_allowed(&conn, s.signup_default)? {
             return Err(ApiErr(StatusCode::FORBIDDEN, "当前不开放注册".into()));
         }
     }
@@ -193,7 +252,7 @@ async fn register(State(s): State<Shared>, headers: HeaderMap, Json(c): Json<Cre
     let mut conn = s.db.lock().unwrap();
     let tx = conn.transaction()?;
     // 在事务内再判断一次，防止并发注册绕过 first 策略
-    if !signup_allowed(&tx, s.signup)? {
+    if !signup_allowed(&tx, s.signup_default)? {
         return Err(ApiErr(StatusCode::FORBIDDEN, "当前不开放注册".into()));
     }
     let first = user_count(&tx)? == 0;
@@ -223,13 +282,23 @@ async fn register(State(s): State<Shared>, headers: HeaderMap, Json(c): Json<Cre
         .into_response())
 }
 
-async fn login(State(s): State<Shared>, headers: HeaderMap, Json(c): Json<Credentials>) -> Result<Response, ApiErr> {
-    let row: Option<(i64, String, String, bool)> = {
+async fn login(
+    State(s): State<Shared>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(c): Json<Credentials>,
+) -> Result<Response, ApiErr> {
+    let ip_key = format!("login-ip:{}", ratelimit::client_ip(&headers, peer));
+    let user_key = format!("login-user:{}", c.username.trim().to_lowercase());
+    limited(&s, &ip_key, LOGIN_IP)?;
+    limited(&s, &user_key, LOGIN_USER)?;
+
+    let row: Option<(i64, String, String, bool, bool)> = {
         let conn = s.db.lock().unwrap();
         conn.query_row(
-            "SELECT id, username, password_hash, is_admin FROM users WHERE username = ?",
+            "SELECT id, username, password_hash, is_admin, disabled FROM users WHERE username = ?",
             [c.username.trim()],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )
         .optional()?
     };
@@ -237,9 +306,15 @@ async fn login(State(s): State<Shared>, headers: HeaderMap, Json(c): Json<Creden
     const DUMMY: &str = "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHRzb21lc2FsdA$4mXpkOvJ1hqG8a5UX5MUMTvhE3cSB4tXuiUWWtSsI3M";
     let hash = row.as_ref().map_or(DUMMY.to_string(), |r| r.2.clone());
     let ok = verify_password(c.password, hash).await;
-    let Some((id, username, _, is_admin)) = row.filter(|_| ok) else {
+    let Some((id, username, _, is_admin, disabled)) = row.filter(|_| ok) else {
+        s.limiter.hit(&ip_key, now());
+        s.limiter.hit(&user_key, now());
         return Err(ApiErr(StatusCode::UNAUTHORIZED, "用户名或密码错误".into()));
     };
+    s.limiter.clear(&user_key);
+    if disabled {
+        return Err(ApiErr(StatusCode::FORBIDDEN, "账号已停用，请联系管理员".into()));
+    }
 
     let token = {
         let conn = s.db.lock().unwrap();
@@ -280,14 +355,15 @@ async fn change_password(
     headers: HeaderMap,
     Json(p): Json<ChangePassword>,
 ) -> ApiResult<StatusCode> {
-    if p.new.chars().count() < 8 {
-        return Err(bad("新密码至少 8 位"));
-    }
+    validate_password(&p.new)?;
+    let key = format!("password:{uid}");
+    limited(&s, &key, PASSWORD_USER)?;
     let hash: String = {
         let conn = s.db.lock().unwrap();
         conn.query_row("SELECT password_hash FROM users WHERE id = ?", [uid], |r| r.get(0))?
     };
     if !verify_password(p.old, hash).await {
+        s.limiter.hit(&key, now());
         return Err(bad("原密码错误"));
     }
     let new_hash = hash_password(p.new).await?;
