@@ -2,12 +2,12 @@
 import type { CalendarEvent, CalendarType } from '@schedule-x/calendar';
 import { PALETTE } from './store.svelte';
 import { addDays, fromTs, inWeeks, isoWeekday, occursOn, startOfDay, termWeek, toMinutes, ymd } from './time';
-import type { CalEvent, Course, FeedEvent, Todo } from './types';
+import type { CalEvent, Countdown, Course, FeedEvent, Todo } from './types';
 
 export const TZ = Temporal.Now.timeZoneId();
 
 export type Range = { start: Date; end: Date };
-export type EventRef = { kind: 'event' | 'course' | 'todo' | 'feed'; id: number };
+export type EventRef = { kind: 'event' | 'course' | 'todo' | 'feed' | 'countdown'; id: number };
 
 // ---------- 颜色：每个调色板颜色对应一个 Schedule-X calendar ----------
 
@@ -143,4 +143,31 @@ export function feedInstances(events: FeedEvent[]): CalendarEvent[] {
       _options: { additionalClasses: ['is-feed'] },
     };
   });
+}
+
+/** 倒数日（全天）；每年重复的按可见范围内的每一年展开，标题带周年 */
+export function countdownInstances(list: Countdown[], r: Range): CalendarEvent[] {
+  const out: CalendarEvent[] = [];
+  for (const c of list) {
+    const t = fromTs(c.target_at);
+    const dates: Date[] = [];
+    if (c.repeat === 'yearly') {
+      for (let y = Math.max(r.start.getFullYear(), t.getFullYear()); y <= r.end.getFullYear(); y++) {
+        const d = new Date(y, t.getMonth(), t.getDate());
+        if (d.getMonth() === t.getMonth() && d >= startOfDay(r.start) && d <= r.end) dates.push(d);
+      }
+    } else if (t >= startOfDay(r.start) && t <= r.end) dates.push(t);
+    for (const d of dates) {
+      const years = d.getFullYear() - t.getFullYear();
+      out.push({
+        id: `cd${c.id}_${ymd(d)}`,
+        title: `⏳ ${c.title}${c.repeat === 'yearly' && years > 0 ? `（${years} 周年）` : ''}`,
+        calendarId: calendarId(c.color),
+        start: plainDate(d),
+        end: plainDate(d),
+        ref: { kind: 'countdown', id: c.id } satisfies EventRef,
+      });
+    }
+  }
+  return out;
 }

@@ -1,12 +1,12 @@
 <script lang="ts">
   import { ImagePlus, Pin, Plus, Repeat, X } from '@lucide/svelte';
   import { toast } from 'svelte-sonner';
-  import ChannelPick from '../components/ChannelPick.svelte';
-  import Choice from '../components/Choice.svelte';
-  import ColorPick from '../components/ColorPick.svelte';
-  import Field from '../components/Field.svelte';
-  import Page from '../components/Page.svelte';
-  import Sheet from '../components/Sheet.svelte';
+  import ChannelPick from '../ChannelPick.svelte';
+  import Choice from '../Choice.svelte';
+  import ColorPick from '../ColorPick.svelte';
+  import Field from '../Field.svelte';
+  import Panel from './Panel.svelte';
+  import Sheet from '../Sheet.svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Switch } from '$lib/components/ui/switch';
@@ -130,7 +130,7 @@
   }
 </script>
 
-<Page title="倒数日">
+<Panel name="countdowns" title="倒数日">
   {#snippet actions()}
     <Button onclick={() => edit()}><Plus />新建</Button>
   {/snippet}
@@ -175,7 +175,7 @@
       </p>
     {/each}
   </div>
-</Page>
+</Panel>
 
 <Sheet bind:open={sheet} title={form.id ? '编辑倒数日' : '新建倒数日'} onsave={save} ondelete={form.id ? remove : undefined}>
   <Field label="名称"><Input required bind:value={form.title} placeholder="例如：期末考试、妈妈生日" /></Field>

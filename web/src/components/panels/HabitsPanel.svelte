@@ -1,12 +1,12 @@
 <script lang="ts">
   import { Bell, Check, Minus, NotebookPen, Plus } from '@lucide/svelte';
-  import ChannelPick from '../components/ChannelPick.svelte';
-  import Choice from '../components/Choice.svelte';
-  import ColorPick from '../components/ColorPick.svelte';
-  import Field from '../components/Field.svelte';
-  import Page from '../components/Page.svelte';
-  import Sheet from '../components/Sheet.svelte';
-  import TrendBars from '../components/TrendBars.svelte';
+  import ChannelPick from '../ChannelPick.svelte';
+  import Choice from '../Choice.svelte';
+  import ColorPick from '../ColorPick.svelte';
+  import Field from '../Field.svelte';
+  import Panel from './Panel.svelte';
+  import Sheet from '../Sheet.svelte';
+  import TrendBars from '../TrendBars.svelte';
   import { Button } from '$lib/components/ui/button';
   import * as Card from '$lib/components/ui/card';
   import { Input } from '$lib/components/ui/input';
@@ -150,7 +150,7 @@
   const TARGETS = [1, 2, 3, 4, 5, 6, 7].map((n) => ({ value: n, label: n === 7 ? '每天' : `每周 ${n} 次` }));
 </script>
 
-<Page title="习惯养成">
+<Panel name="habits" title="习惯">
   {#snippet actions()}
     <Button onclick={() => edit()}><Plus />新习惯</Button>
   {/snippet}
@@ -269,7 +269,7 @@
     </div>
   </Tooltip.Provider>
   <p class="text-muted-foreground mt-3 text-xs">点击格子打卡；计数型习惯或有备注的日子点击后可编辑次数与备注（右键 / 长按也可以）。</p>
-</Page>
+</Panel>
 
 <Sheet bind:open={sheet} title={form.id ? '编辑习惯' : '新习惯'} onsave={save} ondelete={form.id ? () => db.habits.remove(form.id) : undefined}>
   <Field label="名称"><Input required bind:value={form.name} placeholder="例如：喝水" /></Field>

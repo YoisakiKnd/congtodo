@@ -209,3 +209,13 @@ export const DEFAULT_PERIODS: Period[] = [
   ['19:55', '20:40'],
   ['20:50', '21:35'],
 ].map(([start, end]) => ({ start, end }));
+
+/** 设置里保存的作息时间（JSON） */
+export function parsePeriods(s: string | undefined): Period[] {
+  try {
+    const v = s ? JSON.parse(s) : [];
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}

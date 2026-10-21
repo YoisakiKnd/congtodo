@@ -163,6 +163,8 @@
 .sx-host .sx__calendar-wrapper {
 	border: 0;
 	font-family: var(--font-sans);
+	/* 固定高度：周 / 日视图在日历内部滚动（滚动控制插件才能定位到早上），工具栏不会滚走 */
+	height: max(34rem, calc(100dvh - 14rem));
 }
 /* 非本周课程：淡化显示 */
 .sx-host .is-inactive {
@@ -219,5 +221,32 @@
 	}
 	.cx-sub {
 		font-size: 9px;
+	}
+}
+
+/* Schedule-X 头部在手机上压成一行：标题 + 视图切换 + 日期 */
+@media (max-width: 640px) {
+	.sx-host .sx__calendar-header {
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 8px;
+		padding: 10px 12px;
+	}
+	.sx-host .sx__calendar-header-content:last-child {
+		flex-wrap: nowrap;
+		gap: 6px;
+		margin-left: auto;
+	}
+	.sx-host .sx__view-selection-label {
+		display: none;
+	}
+	.sx-host .sx__view-selection-selected-item,
+	.sx-host .sx__date-input {
+		height: 34px;
+		padding-top: 0;
+		padding-bottom: 0;
+	}
+	.sx-host .sx__date-picker-wrapper {
+		width: 8.5rem;
 	}
 }

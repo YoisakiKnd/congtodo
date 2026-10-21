@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Bell, CalendarClock, Inbox, ListTodo, Plus, Repeat, Settings2, Share2, Sun, Trash2, Users, X } from '@lucide/svelte';
+  import { Bell, CalendarClock, Inbox, ListTodo, Plus, Repeat, Settings2, Share2, Sun, Timer, Trash2, Users, X } from '@lucide/svelte';
   import { toast } from 'svelte-sonner';
   import ChannelPick from '../components/ChannelPick.svelte';
   import Choice from '../components/Choice.svelte';
@@ -15,6 +15,7 @@
   import * as Tabs from '$lib/components/ui/tabs';
   import { Textarea } from '$lib/components/ui/textarea';
   import * as ToggleGroup from '$lib/components/ui/toggle-group';
+  import { startFocus, timer } from '$lib/focus.svelte';
   import { auth, clock, db, deleteList, lists, PALETTE, removeMember, saveList, shareList } from '$lib/store.svelte';
   import { addDays, fmtRelative, fromInput, startOfDay, toInput, toTs } from '$lib/time';
   import type { ChannelIds, Todo, TodoList, TodoRepeat } from '$lib/types';
@@ -259,12 +260,25 @@
             {@const kids = childrenOf.get(t.id) ?? []}
             {@const doneKids = kids.filter((k) => k.done).length}
             {@const owner = t.user_id !== auth.user?.id}
-            <div class="hover:bg-muted/60 flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors">
+            <div class="group hover:bg-muted/60 flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors">
               <Checkbox checked={!!t.done} onCheckedChange={() => toggle(t)} aria-label="切换完成" />
               <button class="min-w-0 flex-1 text-left" onclick={() => edit(t)}>
                 <p class={cn(t.done && 'text-muted-foreground line-through')}>{t.title}</p>
                 {#if t.note}<p class="text-muted-foreground truncate text-xs">{t.note}</p>{/if}
               </button>
+              {#if !t.done}
+                <button
+                  class={cn(
+                    'text-muted-foreground hover:text-primary rounded p-1 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 max-md:hidden',
+                    timer.todoId === t.id && 'text-primary opacity-100',
+                  )}
+                  title="开始专注"
+                  aria-label="开始专注"
+                  onclick={() => startFocus(t.id)}
+                >
+                  <Timer class="size-4" />
+                </button>
+              {/if}
               {#if view === 'all' || view === 'today'}
                 {@const l = t.list_id ? listById.get(t.list_id) : undefined}
                 {#if l}<Badge variant="outline" class="hidden sm:inline-flex"><span class="size-1.5 rounded-full" style="background: {l.color}"></span>{l.name}</Badge>{/if}
@@ -302,7 +316,10 @@
 </Page>
 
 <Sheet bind:open={sheet} title="编辑待办" onsave={saveTodo} ondelete={() => db.todos.remove(form.id)}>
-  <Field label="标题"><Input required bind:value={form.title} /></Field>
+  <div class="flex items-end gap-2">
+    <Field label="标题" class="flex-1"><Input required bind:value={form.title} /></Field>
+    <Button variant="outline" title="开始专注" onclick={() => ((sheet = false), startFocus(form.id))}><Timer />专注</Button>
+  </div>
   <div class="grid grid-cols-2 gap-3">
     <Field label="清单"><Choice bind:value={form.list_id} options={LIST_OPTIONS} /></Field>
     <Field label="重复"><Choice bind:value={form.repeat} options={REPEATS} /></Field>

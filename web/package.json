@@ -1,7 +1,7 @@
 {
   "name": "congtodo-web",
   "private": true,
-  "version": "0.2.0-alpha.1",
+  "version": "0.3.0-alpha.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -31,8 +31,10 @@
   },
   "dependencies": {
     "@schedule-x/calendar": "^4.9.1",
+    "@schedule-x/calendar-controls": "^4.9.1",
     "@schedule-x/current-time": "^4.9.1",
     "@schedule-x/events-service": "^4.9.1",
+    "@schedule-x/scroll-controller": "^4.9.1",
     "@schedule-x/theme-shadcn": "^4.9.1",
     "temporal-polyfill": "0.3.2"
   }

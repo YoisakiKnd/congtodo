@@ -5,6 +5,7 @@
     type CalendarConfig,
     type CalendarEvent,
     type CustomComponentFn,
+    type PluginBase,
   } from '@schedule-x/calendar';
   import { createCurrentTimePlugin } from '@schedule-x/current-time';
   import { mode } from 'mode-watcher';
@@ -17,12 +18,15 @@
     build,
     onrange,
     custom = {},
+    plugins = [],
   }: {
     config: CalendarConfig;
     build: (r: Range) => CalendarEvent[];
     onrange?: (r: Range) => void;
     /** 自定义渲染（如 monthGridDate / weekGridDate），直接操作 DOM */
     custom?: Record<string, CustomComponentFn>;
+    /** 额外的 Schedule-X 插件（如视图控制、滚动位置） */
+    plugins?: PluginBase<string>[];
   } = $props();
 
   let el: HTMLDivElement;
@@ -53,7 +57,7 @@
           },
         },
       },
-      [createCurrentTimePlugin()],
+      [createCurrentTimePlugin(), ...plugins],
     );
     for (const [name, fn] of Object.entries(custom)) cal._setCustomComponentFn(name, fn);
     cal.render(el);
